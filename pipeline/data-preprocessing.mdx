@@ -1,0 +1,119 @@
+---
+title: "Phase 3: Data preprocessing and feature engineering"
+description: "Preprocess raw sensor CSVs, detect data format, resample to 5-minute intervals, and engineer ML-ready features including time, temperature, and occupancy."
+---
+
+Phase 3 turns raw sensor CSV files into a clean, feature-rich dataset ready for model training. The `run_preprocessing()` function handles the full pipeline in one call: it detects whether the input data is in wide or long format, loads and cleans it, resamples to a consistent 5-minute frequency, and engineers eight aggregate features. It then produces a temporal 80/20 train/test split and saves all artefacts to `data/processed/`.
+
+## Format detection
+
+The raw CSVs can come from either Phase 1 (wide format) or Phase 2 (long format). `detect_format()` inspects the first three rows of the first CSV to determine which loader to use:
+
+| Format | Detection condition | Loader |
+|--------|---------------------|--------|
+| `wide` | Has columns starting with `temperature_` and `power_` | `load_wide_format()` |
+| `long` | Has a `sensor_type` or `room` column | `load_long_format()` |
+
+If neither condition matches, the format defaults to `wide`.
+
+## Loading and cleaning
+
+<Tabs>
+  <Tab title="Wide format (Phase 1)">
+    `load_wide_format()` reads all CSVs from `data/raw/`, concatenates them, parses the timestamp index, and returns a single merged DataFrame. No pivoting is needed.
+
+    ```python
+    from pipeline.preprocess import load_wide_format
+
+    df_wide = load_wide_format()
+    ```
+  </Tab>
+  <Tab title="Long format (Phase 2)">
+    `load_long_format()` reads all CSVs from `data/raw/`, coerces the `value` column to numeric, drops rows with missing timestamps or non-numeric values, and returns a tidy long-format DataFrame.
+
+    The `wide_format()` function then pivots it to wide format and resamples to a 5-minute frequency, forward- and backward-filling any gaps:
+
+    ```python
+    from pipeline.preprocess import load_long_format, wide_format
+
+    df_long = load_long_format()
+    df_wide = wide_format(df_long, resample_freq='5min')
+    ```
+  </Tab>
+</Tabs>
+
+## Feature engineering
+
+`engineer_features()` takes the wide-format DataFrame and produces a new DataFrame containing only the eight engineered features used in model training:
+
+| Feature | Description |
+|---------|-------------|
+| `hour` | Hour of day extracted from the timestamp index (0–23) |
+| `day_of_week` | Day of week (0=Monday, 6=Sunday) |
+| `is_weekend` | 1 if Saturday or Sunday, else 0 |
+| `mean_temperature` | Mean of all `temperature_{room}` columns, rounded to 2 decimal places |
+| `mean_humidity` | Mean of all `humidity_{room}` columns, rounded to 2 decimal places |
+| `occupancy_count` | Sum of all `occupancy_{room}` columns |
+| `active_appliances` | Count of `power_{appliance}` columns with a value greater than 10 W |
+| `total_power` | Sum of all `power_{appliance}` columns in watts (target variable) |
+
+<Note>
+`total_power` is both an engineered feature in `features_data.csv` and the prediction target used by `prepare_data()`. The split function removes it from the feature matrix `X` and assigns it to the target vector `y`.
+</Note>
+
+## Train/test split
+
+`prepare_data()` performs a **temporal split** to preserve time-series integrity. The most recent 20% of records become the test set; the remaining 80% form the training set. Features are scaled with `StandardScaler`.
+
+| Setting | Value (from `config/settings.py`) |
+|---------|------------------------------------|
+| `test_ratio` | `0.2` |
+| `folds` | `5` (used in Phase 4 cross-validation) |
+
+```python
+from pipeline.preprocess import run_preprocessing
+from pipeline.split import prepare_data, save_split
+
+df_features = run_preprocessing()
+X_train, y_train, X_test, y_test, scaler, feature_cols = prepare_data(df_features)
+save_split(X_train, y_train, X_test, y_test, scaler, feature_cols)
+```
+
+## Outputs
+
+| File | Description |
+|------|-------------|
+| `data/processed/wide_data.csv` | Resampled wide-format dataset with all sensor columns |
+| `data/processed/features_data.csv` | Eight engineered features plus `total_power` target |
+| `data/processed/X_train.npy` | Scaled training feature matrix |
+| `data/processed/X_test.npy` | Scaled test feature matrix |
+| `data/processed/y_train.npy` | Training target vector |
+| `data/processed/y_test.npy` | Test target vector |
+| `data/processed/scaler.pkl` | Fitted `StandardScaler` object |
+| `data/processed/feature_cols.pkl` | Ordered list of feature column names |
+
+## Running Phase 3
+
+**As part of the pipeline:**
+
+```bash
+python run_all.py --only 3
+```
+
+**Starting from Phase 3 (uses existing raw data):**
+
+```bash
+python run_all.py --start-from 3
+```
+
+**Standalone preprocessing only:**
+
+```bash
+python -m pipeline.preprocess
+```
+
+**Standalone split only (requires `features_data.csv` to exist):**
+
+```bash
+python -m pipeline.split
+```

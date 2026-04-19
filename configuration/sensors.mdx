@@ -1,0 +1,162 @@
+---
+title: "Sensor emulation configuration"
+description: "Configure temperature, humidity, occupancy, and smart plug sensors — including rooms, appliances, sampling intervals, and anomaly rates for emulation."
+---
+
+The emulation layer generates synthetic readings for four sensor types across every room and appliance defined in `config/settings.py`. Each sensor module reads its parameters — rooms, appliances, sampling intervals, and anomaly rates — directly from that file, so you only need to edit one place to change the scope of your dataset.
+
+## Sensor types
+
+<AccordionGroup>
+  <Accordion title="Temperature sensor">
+    Generates realistic room temperatures in degrees Celsius. Each room has a base temperature and a daily amplitude that drives a sinusoidal day/night cycle (coolest at 05:00, warmest at 15:00). Kitchen and bathroom receive activity-based boosts during meal times and morning/evening routines.
+
+    - **Sampled every**: 30 seconds (`temp_interval`)
+    - **Scope**: one reading per room per interval
+    - **Output**: rounded to one decimal place (°C)
+
+    **Room baselines**
+
+    | Room | Base temp (°C) | Amplitude (°C) |
+    |---|---|---|
+    | `bedroom` | 18.0 | 1.5 |
+    | `living_room` | 20.0 | 2.0 |
+    | `bathroom` | 22.0 | 2.5 |
+    | `kitchen` | 21.0 | 3.0 |
+    | `studio` | 20.5 | 2.0 |
+
+    ```python emulation/sensors/temperature.py
+    room_temperature = {
+        'bedroom':      {'base': 18.0, 'amplitude': 1.5},
+        'living_room':  {'base': 20.0, 'amplitude': 2.0},
+        'bathroom':     {'base': 22.0, 'amplitude': 2.5},
+        'kitchen':      {'base': 21.0, 'amplitude': 3.0},
+        'studio':       {'base': 20.5, 'amplitude': 2.0},
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Humidity sensor">
+    Generates relative humidity percentages (clamped to the realistic range 20–95 %). Humidity is inversely correlated with temperature: each 1 °C above 20 °C reduces humidity by 0.5 %. Kitchen and bathroom receive positive boosts during meal times and morning/evening routines.
+
+    - **Sampled every**: 30 seconds (`hum_interval`)
+    - **Scope**: one reading per room per interval
+    - **Output**: rounded to one decimal place (%)
+
+    **Room baselines**
+
+    | Room | Base humidity (%) | Amplitude (%) |
+    |---|---|---|
+    | `bedroom` | 40 | 5 |
+    | `living_room` | 45 | 5 |
+    | `bathroom` | 55 | 15 |
+    | `kitchen` | 50 | 10 |
+    | `studio` | 42 | 5 |
+
+    ```python emulation/sensors/humidity.py
+    room_humidity = {
+        'bedroom':      {'base': 40, 'amplitude': 5},
+        'living_room':  {'base': 45, 'amplitude': 5},
+        'bathroom':     {'base': 55, 'amplitude': 15},
+        'kitchen':      {'base': 50, 'amplitude': 10},
+        'studio':       {'base': 42, 'amplitude': 5},
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Occupancy sensor">
+    Returns a binary value (1 = occupied, 0 = vacant) by sampling from hour-level probability tables. Separate tables are used for weekdays and weekends to reflect realistic human behaviour — the studio, for example, has high weekday daytime occupancy and near-zero weekend occupancy.
+
+    - **Sampled every**: 10 seconds (`occ_interval`)
+    - **Scope**: one reading per room per interval
+    - **Output**: `0` or `1`
+
+    ```python emulation/sensors/occupancy.py
+    def generate_occupancy(room, hour, is_weekend):
+        if is_weekend:
+            prob_occupancy = prob_weekend_occupancy
+        else:
+            prob_occupancy = prob_weekday_occupancy
+
+        prob = prob_occupancy[room][hour]
+        return 1 if np.random.rand() < prob else 0
+    ```
+  </Accordion>
+
+  <Accordion title="Smart plug sensor">
+    Simulates power draw in watts for each appliance. The module uses per-appliance activation schedules (weekday and weekend), occupancy as a gate, and Gaussian noise. Always-on appliances (the refrigerator) follow a duty-cycle model. Anomalies are applied as a separate post-processing step via `apply_anomalies()`.
+
+    - **Sampled every**: 5 seconds (`sp_interval`)
+    - **Scope**: one reading per appliance per interval
+    - **Output**: power in watts (clipped to appliance maximum)
+
+    **Appliance power profiles**
+
+    | Appliance | Base (W) | Active (W) | Max (W) | Always on |
+    |---|---|---|---|---|
+    | `washing_machine` | 0 | 500 | 2500 | No |
+    | `refrigerator` | 50 | 120 (cycle) | 300 | Yes |
+    | `television` | 5 | 100 | 250 | No |
+    | `microwave` | 0 | 800 | 1500 | No |
+    | `kettle` | 0 | 2200 | 2400 | No |
+    | `computer` | 5 | 150 | 500 | No |
+    | `dishwasher` | 0 | 1200 | 2500 | No |
+    | `lighting` | 0 | 60 | 200 | No |
+  </Accordion>
+</AccordionGroup>
+
+## Rooms and appliances
+
+The lists below, defined in `config/settings.py`, determine which rooms and appliances are included in every generated dataset.
+
+```python config/settings.py
+rooms = ['bedroom', 'living_room', 'bathroom', 'kitchen', 'studio']
+
+appliances = [
+    'washing_machine', 'refrigerator', 'television', 'microwave',
+    'kettle', 'computer', 'dishwasher', 'lighting'
+]
+```
+
+### Adding rooms
+
+1. Append the new room name to the `rooms` list in `config/settings.py`.
+2. Add a corresponding entry to `room_temperature` in `emulation/sensors/temperature.py`.
+3. Add a corresponding entry to `room_humidity` in `emulation/sensors/humidity.py`.
+4. Add 24-hour probability arrays to both `prob_weekday_occupancy` and `prob_weekend_occupancy` in `emulation/sensors/occupancy.py`.
+
+<Warning>
+Skipping any of the sensor files will raise a `KeyError` at emulation time because each module looks up every room by name.
+</Warning>
+
+### Adding appliances
+
+1. Append the new appliance name to the `appliances` list in `config/settings.py`.
+2. Add an entry to `appliance_power` in `emulation/sensors/smart_plug.py` with `base`, `active`, and `always_on` fields.
+3. Add a schedule entry to `appliance_schedules` with `default`, `weekday`, and `weekend` keys.
+4. Add a maximum power cap to `appliance_max`.
+
+## Anomaly rates
+
+Anomalies are injected into smart plug readings after the base power value is generated. The rates are read directly from `config/settings.py`.
+
+| Setting | Value | Behaviour |
+|---|---|---|
+| `anomaly_rate` | `0.20` | Overall probability that any reading is anomalous |
+| `anomaly_rate_active` | `0.10` | When power > 10 W: random spike of 1.5×–3.0× normal power |
+| `anomaly_rate_inactive` | `0.015` | When power ≤ 10 W: phantom load injected for appliances that have one (`television`, `computer`, `lighting`) |
+
+<Note>
+The `anomaly_rate` parameter in `settings.py` reflects the dataset-level target. The actual injection mechanism uses `anomaly_rate_active` and `anomaly_rate_inactive` separately inside `apply_anomalies()` in `emulation/sensors/smart_plug.py`.
+</Note>
+
+## Sampling intervals
+
+| Sensor | Setting | Default |
+|---|---|---|
+| Temperature | `temp_interval` | 30 s |
+| Humidity | `hum_interval` | 30 s |
+| Occupancy | `occ_interval` | 10 s |
+| Smart plug | `sp_interval` | 5 s |
+
+The intervals control how often each sensor module publishes a reading to the MQTT broker during live emulation. They do not affect the `sample_freq` used to build the offline CSV dataset.

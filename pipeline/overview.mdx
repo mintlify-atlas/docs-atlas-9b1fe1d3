@@ -1,0 +1,90 @@
+---
+title: "Pipeline architecture: six-phase overview"
+description: "An overview of the Smart Home Energy Prediction six-phase pipeline — from synthetic sensor generation and MQTT streaming to ML training and validation."
+---
+
+The Smart Home Energy Prediction pipeline is a sequential six-phase system that takes you from raw synthetic sensor data through machine learning model training, evaluation, and real-world validation. Each phase builds on the outputs of the previous one, and you can run the full pipeline end-to-end with a single command or target individual phases as needed.
+
+## The six phases
+
+<Steps>
+  <Step title="Phase 1 — Sensor data emulation">
+    Generates two years of synthetic smart home sensor readings — temperature, humidity, occupancy, and appliance power — at 5-minute intervals across five rooms. Runs a suite of validation tests and writes the dataset to `data/raw/test_dataset.csv`.
+  </Step>
+  <Step title="Phase 2 — MQTT infrastructure">
+    Publishes the emulated sensor data to a Mosquitto MQTT broker at `localhost:1883`. A subscriber process runs alongside the publisher and saves readings to `data/raw/`. This phase requires Mosquitto to be running and can be skipped with `--skip-mqtt`.
+  </Step>
+  <Step title="Phase 3 — Data preprocessing and feature engineering">
+    Loads raw CSVs, auto-detects whether they are in wide or long format, resamples to a 5-minute frequency, and engineers eight ML-ready features. Splits the data 80/20 into training and test sets and saves all artefacts to `data/processed/`.
+  </Step>
+  <Step title="Phase 4 — ML model training and evaluation">
+    Trains three regression models — Linear Regression, Random Forest, and MLP Regressor — with GridSearchCV hyperparameter tuning and 5-fold cross-validation. Evaluates each model against R², RMSE, and MAE dissertation targets. Saves trained models and plots to `results/`.
+  </Step>
+  <Step title="Phase 5 — Feature importance and decomposition analysis">
+    Runs permutation importance (50 repeats) with p-value significance testing across all models, then applies Oh's decomposition to separate each feature's direct contribution from its interaction effects. Outputs CSVs and plots to `results/`.
+  </Step>
+  <Step title="Phase 6 — Validation against real-world datasets">
+    Compares emulated feature distributions against the UCI Appliances Energy Prediction dataset and the Kaggle Smart Home Dataset using Kolmogorov-Smirnov tests and a ±20% mean tolerance check. Requires dataset files in `data/validation/`.
+  </Step>
+</Steps>
+
+## Phase summary
+
+| Phase | Name | Key modules | Primary outputs |
+|-------|------|-------------|-----------------|
+| 1 | Sensor data emulation | `emulation.generate_dataset`, `emulation.sensor_tests` | `data/raw/test_dataset.csv` |
+| 2 | MQTT infrastructure | `emulation.mqtt_publisher`, `pipeline.subscriber` | `data/raw/*.csv` |
+| 3 | Data preprocessing | `pipeline.preprocess`, `pipeline.split` | `data/processed/wide_data.csv`, `data/processed/features_data.csv`, split `.npy` files |
+| 4 | ML model training | `models.train`, `models.evaluate` | `results/trained_models.pkl`, `results/evaluation_metrics.csv`, plots |
+| 5 | Feature analysis | `analysis.feature_importance`, `analysis.decomposition` | `results/permutation_importance.csv`, `results/oh_decomposition.csv`, plots |
+| 6 | Validation | `analysis.validation` | `results/validation_results.csv`, plots |
+
+## Running the pipeline
+
+**Full pipeline with MQTT (all six phases):**
+
+```bash
+python run_all.py
+```
+
+**Skip Phase 2 (no Mosquitto required):**
+
+```bash
+python run_all.py --skip-mqtt
+```
+
+**Run a single phase only:**
+
+```bash
+python run_all.py --only 4
+```
+
+**Start from a specific phase (runs that phase and all subsequent):**
+
+```bash
+python run_all.py --start-from 3
+```
+
+<Note>
+When using `--start-from`, any required input files from earlier phases must already exist. For example, starting from Phase 4 requires the split `.npy` files in `data/processed/`.
+</Note>
+
+## Individual phase pages
+
+<CardGroup cols={2}>
+  <Card title="Phase 1: Sensor emulation" icon="microchip" href="/pipeline/sensor-emulation">
+    Synthetic data generation for temperature, humidity, occupancy, and appliance power
+  </Card>
+  <Card title="Phase 2: MQTT streaming" icon="wifi" href="/pipeline/mqtt-infrastructure">
+    Real-time sensor publishing via Mosquitto broker
+  </Card>
+  <Card title="Phase 3: Preprocessing" icon="filter" href="/pipeline/data-preprocessing">
+    Format detection, resampling, and feature engineering
+  </Card>
+  <Card title="Phase 4: Model training" icon="brain" href="/pipeline/model-training">
+    Linear Regression, Random Forest, and MLP with GridSearchCV tuning
+  </Card>
+  <Card title="Phase 5 & 6: Analysis" icon="chart-bar" href="/pipeline/analysis">
+    Permutation importance, Oh's decomposition, and real-world validation
+  </Card>
+</CardGroup>

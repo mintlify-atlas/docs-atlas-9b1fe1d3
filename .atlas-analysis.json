@@ -1,0 +1,91 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "Smart Home Energy Prediction",
+  "projectDescription": "A Python pipeline that emulates smart home sensor data, preprocesses it, and trains machine learning models (Linear Regression, Random Forest, MLP) to predict household energy consumption.",
+  "theme": "palm",
+  "primaryColor": "#2E7D5E",
+  "lightColor": "#E8F5EF",
+  "darkColor": "#1A4A38",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Pipeline Phases",
+            "pages": [
+              "pipeline/overview",
+              "pipeline/sensor-emulation",
+              "pipeline/mqtt-infrastructure",
+              "pipeline/data-preprocessing",
+              "pipeline/model-training",
+              "pipeline/analysis"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/settings",
+              "configuration/sensors",
+              "configuration/models"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Module Reference",
+            "pages": [
+              "reference/emulation",
+              "reference/pipeline",
+              "reference/models",
+              "reference/analysis"
+            ]
+          },
+          {
+            "group": "Outputs",
+            "pages": [
+              "reference/data-formats",
+              "reference/results"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Synthetic smart home sensor data generation (temperature, humidity, occupancy, smart plugs)",
+    "MQTT-based real-time sensor data streaming via Mosquitto broker",
+    "Automated data preprocessing with format detection (wide/long) and feature engineering",
+    "Three ML models: Linear Regression, Random Forest, and MLP Regressor with GridSearchCV tuning",
+    "Statistical model comparison using paired t-tests",
+    "Permutation-based feature importance analysis with significance testing",
+    "Oh's decomposition analysis for model interpretability",
+    "Validation against real-world datasets",
+    "Six-phase CLI pipeline with selective phase execution"
+  ],
+  "publicApiSurface": [
+    "generate_dataset() — emulation.generate_dataset",
+    "run_emulation(client, mode) — emulation.mqtt_publisher",
+    "run_preprocessing() — pipeline.preprocess",
+    "prepare_data(df_features) — pipeline.split",
+    "train_all_models(X_train, y_train) — models.train",
+    "save_models(results) — models.train",
+    "load_models(input_dir) — models.train",
+    "evaluate_all_models(trained_res, X_test, y_test) — models.evaluate",
+    "run_permutation_importance(trained_res, X_test, y_test, feature_names) — analysis.feature_importance",
+    "run_oh_decomposition(trained_res, X_test, y_test, feature_names) — analysis.decomposition",
+    "run_validation() — analysis.validation",
+    "python run_all.py [--skip-mqtt] [--only PHASE] [--start-from PHASE]"
+  ]
+}

@@ -1,0 +1,155 @@
+---
+title: "ML model hyperparameter configuration"
+description: "Configure Linear Regression, Random Forest, and MLP Regressor hyperparameter grids, GridSearchCV folds, and evaluation metric targets."
+---
+
+The pipeline trains three regression models to predict household energy consumption. Model definitions and their hyperparameter search grids live in `models/train.py` inside the `get_models_and_params()` function. Linear Regression is trained directly; Random Forest and MLP Regressor are tuned with `GridSearchCV` using the fold count defined in `config/settings.py`.
+
+## Models
+
+<AccordionGroup>
+  <Accordion title="Linear Regression">
+    A baseline ordinary least-squares model with no hyperparameters to tune. It is trained in a single fit and provides a performance floor against which the other two models are compared.
+
+    - **Class**: `sklearn.linear_model.LinearRegression`
+    - **Hyperparameter grid**: none
+    - **GridSearchCV**: not used
+    - **Training runs**: 1
+
+    ```python models/train.py
+    'LinearRegression': {
+        'model': LinearRegression(),
+        'params': {}
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Random Forest Regressor">
+    An ensemble of decision trees. The search explores tree count, maximum depth, and the minimum number of samples required to split an internal node.
+
+    - **Class**: `sklearn.ensemble.RandomForestRegressor`
+    - **Fixed args**: `random_state=r_seed`, `n_jobs=-1`
+    - **GridSearchCV folds**: 5 (`folds` in `settings.py`)
+    - **Total fits**: 3 × 3 × 3 × 5 = **135**
+
+    **Hyperparameter grid**
+
+    | Parameter | Values | Options |
+    |---|---|---|
+    | `n_estimators` | `[100, 200, 500]` | 3 |
+    | `max_depth` | `[10, 20, None]` | 3 |
+    | `min_samples_split` | `[2, 5, 10]` | 3 |
+
+    ```python models/train.py
+    'RandomForest': {
+        'model': RandomForestRegressor(random_state=r_seed, n_jobs=-1),
+        'params': {
+            'n_estimators': [100, 200, 500],
+            'max_depth': [10, 20, None],
+            'min_samples_split': [2, 5, 10]
+        }
+    }
+    ```
+
+    <Tip>
+    Reducing `n_estimators` to `[100]` and removing `500` cuts the Random Forest search from 135 fits to 45, which speeds up experimentation significantly while still covering depth and split configurations.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="MLP Regressor">
+    A fully-connected neural network trained with the Adam solver. The search explores network width/depth, activation function, and initial learning rate. Early stopping is enabled to prevent overfitting.
+
+    - **Class**: `sklearn.neural_network.MLPRegressor`
+    - **Fixed args**: `random_state=r_seed`, `max_iter=500`, `early_stopping=True`, `validation_fraction=0.1`, `n_iter_no_change=20`
+    - **GridSearchCV folds**: 5 (`folds` in `settings.py`)
+    - **Total fits**: 3 × 2 × 2 × 5 = **60**
+
+    **Hyperparameter grid**
+
+    | Parameter | Values | Options |
+    |---|---|---|
+    | `hidden_layer_sizes` | `[(64,32), (128,64), (128,64,32)]` | 3 |
+    | `activation` | `['relu', 'tanh']` | 2 |
+    | `learning_rate_init` | `[0.001, 0.01]` | 2 |
+
+    ```python models/train.py
+    'MLPRegressor': {
+        'model': MLPRegressor(
+            random_state=r_seed,
+            max_iter=500,
+            early_stopping=True,
+            validation_fraction=0.1,
+            n_iter_no_change=20
+        ),
+        'params': {
+            'hidden_layer_sizes': [(64,32), (128,64), (128,64,32)],
+            'activation': ['relu', 'tanh'],
+            'learning_rate_init': [0.001, 0.01]
+        }
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Full `get_models_and_params()` function
+
+```python models/train.py
+def get_models_and_params():
+    return {
+        'LinearRegression': {
+            'model': LinearRegression(),
+            'params': {}
+        },
+        'RandomForest': {
+            'model': RandomForestRegressor(random_state=r_seed, n_jobs=-1),
+            'params': {
+                'n_estimators': [100, 200, 500],
+                'max_depth': [10, 20, None],
+                'min_samples_split': [2, 5, 10]
+            }
+        },
+        'MLPRegressor': {
+            'model': MLPRegressor(random_state=r_seed, max_iter=500, early_stopping=True,
+                                  validation_fraction=0.1, n_iter_no_change=20),
+            'params': {
+                'hidden_layer_sizes': [(64,32), (128,64), (128,64,32)],
+                'activation': ['relu', 'tanh'],
+                'learning_rate_init': [0.001, 0.01]
+            }
+        }
+    }
+```
+
+## Evaluation targets
+
+After training, the evaluation phase measures each model against the thresholds defined in `config/settings.py`. A model passes only if it meets all three metric targets.
+
+| Metric | Setting | Target |
+|---|---|---|
+| R² | `r2_target` | ≥ 0.70 |
+| RMSE | `rmse_target` | ≤ 100 W |
+| MAE | `mae_target` | ≤ 70 W |
+
+## Statistical analysis settings
+
+| Setting | Value | Purpose |
+|---|---|---|
+| `significance` | `0.05` | p-value threshold for hypothesis tests on model differences |
+| `permutation_repeats` | `50` | Number of shuffles per feature when computing permutation importance |
+| `validation_tolerance` | `0.20` | Allowed ±20 % deviation in cross-validation checks |
+
+<Info>
+`folds = 5` in `config/settings.py` controls the `cv` argument passed to every `GridSearchCV` call. Increasing it improves estimate stability but multiplies total training runs proportionally — for example, changing to 10 folds doubles the 135 Random Forest fits to 270.
+</Info>
+
+<Warning>
+Expanding the hyperparameter grids without narrowing other axes can make training time grow quickly. Profile on a data subset before running a wide search on the full two-year dataset.
+</Warning>
+
+## Training run summary
+
+| Model | Combinations | Folds | Total fits |
+|---|---|---|---|
+| Linear Regression | — | — | 1 |
+| Random Forest | 27 | 5 | 135 |
+| MLP Regressor | 12 | 5 | 60 |

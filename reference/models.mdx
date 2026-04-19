@@ -1,0 +1,312 @@
+---
+title: "models module: training and evaluation"
+description: "API reference for the models module — train_all_models, evaluate_all_models, compare_models, and diagnostic plot functions for energy prediction."
+---
+
+The `models` module trains, evaluates, and compares three regression models — Linear Regression, Random Forest, and MLP Regressor — against the engineered feature dataset. `train.py` runs `GridSearchCV` hyperparameter tuning for the two non-linear models and persists results to disk. `evaluate.py` computes R², RMSE, and MAE against dissertation targets, runs paired t-tests between models, and generates diagnostic plots.
+
+## train
+
+`models/train.py`
+
+<AccordionGroup>
+  <Accordion title="get_models_and_params()">
+    Returns the three model definitions and their hyperparameter search grids.
+
+    **Parameters:** none.
+
+    **Returns:** `dict[str, dict]` — keys are model names; each value has:
+
+    | Key | Type | Description |
+    |---|---|---|
+    | `model` | estimator | Unfitted scikit-learn estimator. |
+    | `params` | `dict` | Hyperparameter grid for `GridSearchCV`. Empty dict for models with no tuning. |
+
+    **Models and search spaces:**
+
+    | Model | Hyperparameters searched |
+    |---|---|
+    | `LinearRegression` | None |
+    | `RandomForest` | `n_estimators` ∈ {100, 200, 500}, `max_depth` ∈ {10, 20, None}, `min_samples_split` ∈ {2, 5, 10} |
+    | `MLPRegressor` | `hidden_layer_sizes` ∈ {(64,32), (128,64), (128,64,32)}, `activation` ∈ {relu, tanh}, `learning_rate_init` ∈ {0.001, 0.01} |
+
+    ```python
+    from models.train import get_models_and_params
+
+    models = get_models_and_params()
+    for name, info in models.items():
+        print(name, list(info['params'].keys()))
+    ```
+  </Accordion>
+
+  <Accordion title="train_single_model(name, model, params, X_train, y_train)">
+    Trains a single model. If `params` is non-empty, wraps the estimator in `GridSearchCV` with cross-validation and returns the best estimator. If `params` is empty (Linear Regression), fits the model directly.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `name` | `str` | Human-readable model name used for logging. |
+    | `model` | estimator | Unfitted scikit-learn estimator. |
+    | `params` | `dict` | Hyperparameter grid. Pass an empty dict to skip grid search. |
+    | `X_train` | `numpy.ndarray` | Scaled training features. |
+    | `y_train` | `numpy.ndarray` | Training targets. |
+
+    **Returns:** `dict` with:
+
+    | Key | Type | Description |
+    |---|---|---|
+    | `estimator` | estimator | Fitted best estimator (or the model itself when no tuning). |
+    | `best_params` | `dict` or `None` | Best hyperparameters found, or `None` for Linear Regression. |
+    | `cv_score` | `float` or `None` | Best mean cross-validation R² score, or `None` for Linear Regression. |
+    | `cv_results` | `dict` or `None` | Full `GridSearchCV.cv_results_` dict, or `None` for Linear Regression. |
+    | `training_time` | `float` | Wall-clock training time in seconds. |
+
+    ```python
+    from models.train import get_models_and_params, train_single_model
+
+    models = get_models_and_params()
+    result = train_single_model(
+        'RandomForest',
+        models['RandomForest']['model'],
+        models['RandomForest']['params'],
+        X_train, y_train
+    )
+    print(result['best_params'])
+    print(f"CV Score: {result['cv_score']:.3f}")
+    ```
+  </Accordion>
+
+  <Accordion title="train_all_models(X_train, y_train)">
+    Trains all models returned by `get_models_and_params`. Errors for individual models are caught and logged without stopping the remaining training runs.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `X_train` | `numpy.ndarray` | Scaled training features. |
+    | `y_train` | `numpy.ndarray` | Training targets. |
+
+    **Returns:** `dict[str, dict]` — model name to result dict (same schema as `train_single_model`).
+
+    ```python
+    from models.train import train_all_models
+
+    results = train_all_models(X_train, y_train)
+    for name, res in results.items():
+        cv = f"{res['cv_score']:.3f}" if res['cv_score'] else "N/A"
+        print(f"{name}: CV={cv}, time={res['training_time']:.1f}s")
+    ```
+  </Accordion>
+
+  <Accordion title="save_models(results, output_dir)">
+    Serialises trained model results to disk. Writes a single combined pickle (`trained_models.pkl`) containing the full results dict, and also writes one individual pickle per model (`{name}_model.pkl`) containing only the fitted estimator.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `results` | `dict` | Results dict from `train_all_models`. |
+    | `output_dir` | `str` | Output directory. Defaults to `results/`. |
+
+    **Returns:** `None`. Files written:
+    - `results/trained_models.pkl`
+    - `results/LinearRegression_model.pkl`
+    - `results/RandomForest_model.pkl`
+    - `results/MLPRegressor_model.pkl`
+
+    ```python
+    from models.train import train_all_models, save_models
+
+    results = train_all_models(X_train, y_train)
+    save_models(results)
+    ```
+  </Accordion>
+
+  <Accordion title="load_models(input_dir)">
+    Loads the full results dict from `results/trained_models.pkl`.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `input_dir` | `str` | Directory containing `trained_models.pkl`. Defaults to `results/`. |
+
+    **Returns:** `dict[str, dict]` — the same results dict structure as `train_all_models`.
+
+    ```python
+    from models.train import load_models
+
+    results = load_models('results')
+    print(list(results.keys()))
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## evaluate
+
+`models/evaluate.py`
+
+<AccordionGroup>
+  <Accordion title="evaluate_model(model, X_test, y_test, model_name)">
+    Evaluates a single fitted model against the test set, computing R², RMSE, and MAE. Checks each metric against the dissertation targets defined in `config.settings`.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `model` | estimator | A fitted scikit-learn estimator. |
+    | `X_test` | `numpy.ndarray` | Scaled test features. |
+    | `y_test` | `numpy.ndarray` | True test targets. |
+    | `model_name` | `str` | Label used for logging. Defaults to `'Model'`. |
+
+    **Returns:** `dict` with:
+
+    | Key | Type | Description |
+    |---|---|---|
+    | `model_name` | `str` | Model label. |
+    | `r2` | `float` | R² coefficient of determination. |
+    | `rmse` | `float` | Root mean squared error (W). |
+    | `mae` | `float` | Mean absolute error (W). |
+    | `meets_r2_target` | `bool` | `True` if `r2 >= r2_target`. |
+    | `meets_rmse_target` | `bool` | `True` if `rmse <= rmse_target`. |
+    | `meets_mae_target` | `bool` | `True` if `mae <= mae_target`. |
+    | `y_pred` | `numpy.ndarray` | Model predictions on `X_test`. |
+
+    ```python
+    from models.evaluate import evaluate_model
+
+    metrics = evaluate_model(
+        results['RandomForest']['estimator'],
+        X_test, y_test,
+        model_name='RandomForest'
+    )
+    print(f"R²={metrics['r2']:.3f}, RMSE={metrics['rmse']:.1f}W")
+    ```
+  </Accordion>
+
+  <Accordion title="compare_models(eval_res, y_test)">
+    Runs paired t-tests on the absolute errors of every pair of models to determine whether performance differences are statistically significant.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `eval_res` | `dict` | Evaluation results dict from `evaluate_all_models` or multiple `evaluate_model` calls. |
+    | `y_test` | `numpy.ndarray` | True test targets. |
+
+    **Returns:** `list[dict]` — one entry per model pair:
+
+    | Key | Type | Description |
+    |---|---|---|
+    | `Model_A` | `str` | Name of the first model. |
+    | `Model_B` | `str` | Name of the second model. |
+    | `MAE_A` | `float` | Mean absolute error for model A. |
+    | `MAE_B` | `float` | Mean absolute error for model B. |
+    | `t_statistic` | `float` | Paired t-test statistic. |
+    | `p_value` | `float` | Two-tailed p-value. |
+    | `significant` | `bool` | `True` if `p_value < significance` threshold from `config.settings`. |
+    | `better_model` | `str` | Name of the model with lower mean absolute error. |
+
+    ```python
+    from models.evaluate import compare_models
+
+    comparisons = compare_models(eval_res, y_test)
+    for c in comparisons:
+        print(f"{c['Model_A']} vs {c['Model_B']}: p={c['p_value']:.4f}, better={c['better_model']}")
+    ```
+  </Accordion>
+
+  <Accordion title="evaluate_all_models(trained_res, X_test, y_test, save_results, plot_results, output_dir)">
+    Evaluates all trained models, runs pairwise statistical comparisons, and optionally saves results and plots.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `trained_res` | `dict` | Results dict from `train_all_models` or `load_models`. |
+    | `X_test` | `numpy.ndarray` | Scaled test features. |
+    | `y_test` | `numpy.ndarray` | True test targets. |
+    | `save_results` | `bool` | Write `evaluation_metrics.csv` and `model_comparisons.csv`. Defaults to `True`. |
+    | `plot_results` | `bool` | Generate prediction, residual, and comparison plots. Defaults to `True`. |
+    | `output_dir` | `str` | Directory for output files. Defaults to `results/`. |
+
+    **Returns:** `tuple` — `(eval_res, comparisons)`:
+    - `eval_res`: `dict[str, dict]` mapping model names to their evaluation dicts (same schema as `evaluate_model` plus `best_params` and `training_time`).
+    - `comparisons`: `list[dict]` from `compare_models`.
+
+    ```python
+    from models.evaluate import evaluate_all_models
+    from models.train import load_models
+    from pipeline.split import load_split
+
+    X_train, y_train, X_test, y_test, scaler, feature_cols = load_split()
+    trained_res = load_models()
+    eval_res, comparisons = evaluate_all_models(trained_res, X_test, y_test)
+
+    for name, m in eval_res.items():
+        print(f"{name}: R²={m['r2']:.3f}, RMSE={m['rmse']:.1f}W, MAE={m['mae']:.1f}W")
+    ```
+  </Accordion>
+
+  <Accordion title="plot_predictions_vs_actual(y_test, eval_res, output_dir)">
+    Creates a scatter plot of predicted versus actual power for each model, with a perfect-prediction reference line. Saves to `results/prediction_vs_actual.png`.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `y_test` | `numpy.ndarray` | True test targets. |
+    | `eval_res` | `dict` | Evaluation results dict. |
+    | `output_dir` | `str` | Output directory. Defaults to `results/`. |
+
+    **Returns:** `None`.
+
+    ```python
+    from models.evaluate import plot_predictions_vs_actual
+
+    plot_predictions_vs_actual(y_test, eval_res)
+    ```
+  </Accordion>
+
+  <Accordion title="plot_residuals(y_test, eval_res, output_dir)">
+    Generates a two-row subplot grid per model: a histogram of residuals and a scatter plot of residuals over the sample index. Saves to `results/residual_analysis.png`.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `y_test` | `numpy.ndarray` | True test targets. |
+    | `eval_res` | `dict` | Evaluation results dict. |
+    | `output_dir` | `str` | Output directory. Defaults to `results/`. |
+
+    **Returns:** `None`.
+
+    ```python
+    from models.evaluate import plot_residuals
+
+    plot_residuals(y_test, eval_res)
+    ```
+  </Accordion>
+
+  <Accordion title="plot_model_comparison(eval_res, output_dir)">
+    Plots side-by-side bar charts of R², RMSE, and MAE for every model, with horizontal target lines from `config.settings`. Saves to `results/model_comparison_bars.png`.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `eval_res` | `dict` | Evaluation results dict. |
+    | `output_dir` | `str` | Output directory. Defaults to `results/`. |
+
+    **Returns:** `None`.
+
+    ```python
+    from models.evaluate import plot_model_comparison
+
+    plot_model_comparison(eval_res)
+    ```
+  </Accordion>
+</AccordionGroup>

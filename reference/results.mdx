@@ -1,0 +1,230 @@
+---
+title: "Results directory: outputs, metrics, and plots"
+description: "All files written to results/ — trained model pickles, evaluation CSVs, feature importance data, decomposition outputs, and generated plot descriptions."
+---
+
+Every artifact produced by training, evaluation, and analysis is written to the `results/` directory. This page lists each file, its format, and the exact columns or content it contains so you can load and interpret outputs without digging into the source code.
+
+## Trained models
+
+`models/train.py` writes model artifacts to `results/` after training completes.
+
+<CardGroup cols={2}>
+  <Card title="trained_models.pkl" icon="box-archive">
+    Full results dictionary keyed by model name. Each entry holds the estimator, best hyperparameters, CV score, CV results, and training time.
+  </Card>
+  <Card title="Individual model files" icon="file">
+    One pickle per model: `LinearRegression_model.pkl`, `RandomForest_model.pkl`, `MLPRegressor_model.pkl`. Each contains only the fitted estimator.
+  </Card>
+</CardGroup>
+
+### Loading trained models
+
+Use `load_models()` to reload the full results dictionary:
+
+```python
+from models.train import load_models
+
+results = load_models('results')
+# results is a dict with keys: 'LinearRegression', 'RandomForest', 'MLPRegressor'
+# Each value has: estimator, best_params, cv_score, cv_results, training_time
+
+estimator = results['RandomForest']['estimator']
+y_pred = estimator.predict(X_test)
+```
+
+To load a single estimator directly:
+
+```python
+import pickle
+
+with open('results/RandomForest_model.pkl', 'rb') as f:
+    rf_model = pickle.load(f)
+```
+
+---
+
+## Evaluation outputs
+
+`models/evaluate.py` writes two CSV files and three plots after running `evaluate_all_models()`.
+
+### evaluation_metrics.csv
+
+One row per model with performance metrics and pass/fail flags against the dissertation targets.
+
+```csv
+model_name,r2,rmse,mae,meets_r2_target,meets_rmse_target,meets_mae_target,best_params,training_time
+LinearRegression,0.7821,87.43,61.20,True,True,True,None,0.1
+RandomForest,0.9134,55.67,38.41,True,True,True,"{'max_depth': 20, 'min_samples_split': 2, 'n_estimators': 200}",142.3
+MLPRegressor,0.8902,63.15,44.88,True,True,True,"{'activation': 'relu', 'hidden_layer_sizes': (128, 64), 'learning_rate_init': 0.001}",98.7
+```
+
+| Column | Type | Description |
+|---|---|---|
+| `model_name` | string | Model identifier (`LinearRegression`, `RandomForest`, `MLPRegressor`) |
+| `r2` | float | R² coefficient of determination on the test set (4 dp) |
+| `rmse` | float | Root mean squared error in watts (2 dp) |
+| `mae` | float | Mean absolute error in watts (2 dp) |
+| `meets_r2_target` | bool | `True` if R² ≥ 0.70 |
+| `meets_rmse_target` | bool | `True` if RMSE ≤ 100 W |
+| `meets_mae_target` | bool | `True` if MAE ≤ 70 W |
+| `best_params` | string | Stringified dict of best hyperparameters from GridSearchCV; `None` for LinearRegression |
+| `training_time` | float | Wall-clock training time in seconds (1 dp) |
+
+### model_comparisons.csv
+
+All pairwise paired t-tests on absolute prediction errors. With three models, this file always has three rows.
+
+```csv
+Model_A,Model_B,MAE_A,MAE_B,t_statistic,p_value,significant,better_model
+LinearRegression,RandomForest,61.20,38.41,18.431,0.0000,True,RandomForest
+LinearRegression,MLPRegressor,61.20,44.88,12.765,0.0000,True,MLPRegressor
+RandomForest,MLPRegressor,38.41,44.88,-6.342,0.0000,True,RandomForest
+```
+
+| Column | Type | Description |
+|---|---|---|
+| `Model_A` | string | First model in the comparison pair |
+| `Model_B` | string | Second model in the comparison pair |
+| `MAE_A` | float | Mean absolute error of Model A on the test set |
+| `MAE_B` | float | Mean absolute error of Model B on the test set |
+| `t_statistic` | float | Paired t-test statistic |
+| `p_value` | float | Two-tailed p-value |
+| `significant` | bool | `True` if p-value < 0.05 |
+| `better_model` | string | Name of the model with lower mean absolute error |
+
+### Performance targets
+
+The pass/fail flags in `evaluation_metrics.csv` are evaluated against these thresholds, defined in `config/settings.py`:
+
+| Metric | Target |
+|---|---|
+| R² | ≥ 0.70 |
+| RMSE | ≤ 100 W |
+| MAE | ≤ 70 W |
+
+<Note>
+  The `evaluate.py` module docstring cites an MAE target of 120 W, but `config/settings.py` sets `mae_target = 70`. The value from `settings.py` is what the pipeline enforces at runtime.
+</Note>
+
+---
+
+## Evaluation plots
+
+<AccordionGroup>
+  <Accordion title="prediction_vs_actual.png">
+    One scatter subplot per model. The x-axis is the actual `total_power` value; the y-axis is the model's prediction. A red dashed diagonal marks perfect prediction. Points are plotted at 30% opacity to reveal density.
+
+    Saved at 150 dpi. Layout: 1 row × N models, each panel 5 × 5 inches.
+  </Accordion>
+  <Accordion title="residual_analysis.png">
+    Two rows of subplots per model. The top row shows a histogram of residuals (actual − predicted) with a vertical line at zero and a text annotation of mean and standard deviation. The bottom row shows residuals plotted against a simple sequential index to expose any temporal drift or heteroscedasticity.
+
+    Saved at 150 dpi. Layout: 2 rows × N models, each panel 5 × 5 inches.
+  </Accordion>
+  <Accordion title="model_comparison_bars.png">
+    Three side-by-side bar charts — one each for R², RMSE, and MAE — comparing all models. Each chart includes a red dashed horizontal line marking the corresponding performance target. Bar values are annotated above each bar.
+
+    Saved at 150 dpi. Layout: 1 row × 3 panels, total figure 15 × 5 inches.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Feature importance outputs
+
+`analysis/feature_importance.py` runs permutation importance after model evaluation and writes the following files.
+
+### permutation_importance.csv
+
+One row per (model, feature) pair. Features are sorted by descending `mean_importance` within each model.
+
+```csv
+model,feature,rank,mean_importance,std_importance,t_stat,p_value,significant
+RandomForest,total_power,1,0.412300,0.018200,16.0321,0.000001,True
+RandomForest,active_appliances,2,0.187400,0.012100,10.9412,0.000003,True
+RandomForest,hour,3,0.091200,0.009300,6.9241,0.000120,True
+```
+
+| Column | Type | Description |
+|---|---|---|
+| `model` | string | Model name |
+| `feature` | string | Feature name from `feature_cols` |
+| `rank` | int | Importance rank within the model (1 = most important) |
+| `mean_importance` | float | Mean R² decrease across permutation repeats (6 dp) |
+| `std_importance` | float | Standard deviation of R² decrease across repeats (6 dp) |
+| `t_stat` | float | One-sample t-statistic: `mean / (std / √repeats)` (4 dp) |
+| `p_value` | float | One-tailed p-value from the t-distribution (6 dp) |
+| `significant` | bool | `True` if p-value < 0.05 |
+
+### permutation_importance.png
+
+One horizontal bar chart per model. Bars show mean importance with error bars (±1 std). Bars are coloured red if the feature is statistically significant at α = 0.05, blue otherwise. Features are ordered from most to least important (top to bottom).
+
+Saved at 300 dpi with `bbox_inches='tight'`.
+
+### importance_heatmap.png
+
+A heatmap with features on the y-axis and models on the x-axis. Cell colour uses a `coolwarm` scale indicating R² decrease. Each cell is annotated with its numeric value. This makes it easy to spot features that matter across all models versus those that are model-specific.
+
+Saved at 150 dpi.
+
+---
+
+## Decomposition outputs
+
+`analysis/decomposition.py` runs Oh (2022) feature power interaction decomposition and writes three files.
+
+### oh_decomposition.csv
+
+One row per (model, feature) pair, sorted by descending `total_importance_mean` within each model.
+
+```csv
+model,feature,total_importance_mean,total_importance_std,feature_power_mean,feature_power_std,interaction_power_mean,interaction_power_std,feature_power_ratio,base_mae
+RandomForest,active_appliances,0.124300,0.018200,0.098400,0.012100,0.025900,0.009300,0.7917,38.41
+```
+
+| Column | Type | Description |
+|---|---|---|
+| `model` | string | Model name |
+| `feature` | string | Feature name |
+| `total_importance_mean` | float | Mean total MAE contribution (feature power + interaction power) |
+| `total_importance_std` | float | Std of total importance across repeats |
+| `feature_power_mean` | float | Mean direct (independent) contribution to MAE |
+| `feature_power_std` | float | Std of feature power across repeats |
+| `interaction_power_mean` | float | Mean contribution through interactions with other features |
+| `interaction_power_std` | float | Std of interaction power across repeats |
+| `feature_power_ratio` | float | `feature_power_mean / total_importance_mean` — proportion of importance that is independent |
+| `base_mae` | float | Baseline MAE of the model before any permutation |
+
+### oh_decomposition.png
+
+One horizontal grouped bar chart per model. Each feature gets two side-by-side bars: feature power (blue) and interaction power (orange). Features are sorted by total importance.
+
+### oh_decomposition_stacked.png
+
+A single stacked horizontal bar chart for the first model in the results dictionary. Each bar shows the feature power segment (blue) and interaction power segment (orange) stacked. The percentage of importance that is independent is annotated to the right of each bar.
+
+---
+
+## Validation outputs
+
+`analysis/validation.py` writes these files when real-world datasets are present in `data/validation/`.
+
+<AccordionGroup>
+  <Accordion title="validation_results.csv">
+    One row per validated feature. Columns include `feature`, `emulated_mean`, `real_mean`, `pct_difference`, `within_tolerance`, `emulated_std`, `real_std`, `ks_statistic`, `ks_p_value`, `ks_significant`, `ks_result`, `dataset`, `emulated_column`, and `real_column`.
+
+    `within_tolerance` is `True` when the percentage mean difference between emulated and real data is within ±20%.
+  </Accordion>
+  <Accordion title="validation_summary.png">
+    Two horizontal bar charts side-by-side. The left chart shows percentage mean difference per feature (green = PASS, red = FAIL against the 20% tolerance). The right chart shows the KS statistic per feature (green = distributions not significantly different, red = significantly different).
+  </Accordion>
+  <Accordion title="distribution_comparison_<dataset>.png">
+    One histogram per validated feature overlaying the emulated and real distributions. A separate file is generated for each dataset validated (e.g., `distribution_comparison_uci appliances energy.png`).
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+  If `data/validation/` contains no recognised dataset files, the validation module exits gracefully with a logged warning. All other `results/` outputs are unaffected.
+</Tip>

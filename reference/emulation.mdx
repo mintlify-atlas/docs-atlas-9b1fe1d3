@@ -1,0 +1,391 @@
+---
+title: "emulation module: generate_dataset and sensors"
+description: "API reference for the emulation module — generate_dataset, mqtt_publisher, sensor_tests, and sensor submodules: temperature, humidity, occupancy, smart plug."
+---
+
+The `emulation` module generates synthetic smart home sensor data. It covers two modes: direct dataset generation (writing a CSV in one pass) and MQTT-based streaming (publishing readings to a broker tick by tick). Four sensor submodules — temperature, humidity, occupancy, and smart plug — provide the underlying data-generation logic used by both modes.
+
+## generate_dataset
+
+`emulation/generate_dataset.py` iterates over every simulated time interval, calls each sensor submodule, and assembles a single wide-format `pandas.DataFrame`.
+
+<AccordionGroup>
+  <Accordion title="generate_dataset()">
+    Generates the full synthetic dataset for the configured number of days and saves it as a `pandas.DataFrame` indexed by timestamp.
+
+    For each interval the function calls `generate_occupancy`, `generate_temperature`, `generate_humidity`, `generate_power`, and `apply_anomalies` for every room and appliance. Derived columns (`mean_temperature`, `mean_humidity`, `occupancy_count`, `active_appliances`, `total_power`) are appended before the record is stored.
+
+    **Parameters:** none — all settings are read from `config.settings`.
+
+    **Returns:** `pandas.DataFrame` indexed by `timestamp` with columns:
+
+    | Column | Description |
+    |---|---|
+    | `hour` | Hour of day (0–23) |
+    | `day_of_week` | Day of week (0 = Monday) |
+    | `is_weekend` | 1 if Saturday or Sunday, otherwise 0 |
+    | `temperature_<room>` | Temperature reading for each room (°C) |
+    | `humidity_<room>` | Humidity reading for each room (%) |
+    | `occupancy_<room>` | Occupancy flag for each room (0 or 1) |
+    | `power_<appliance>` | Power consumption for each appliance (W) |
+    | `mean_temperature` | Mean temperature across all rooms |
+    | `mean_humidity` | Mean humidity across all rooms |
+    | `occupancy_count` | Number of occupied rooms |
+    | `active_appliances` | Number of appliances drawing more than 10 W |
+    | `total_power` | Total power across all appliances (W) |
+
+    ```python
+    from emulation.generate_dataset import generate_dataset
+
+    df = generate_dataset()
+    print(df.shape)       # (intervals, columns)
+    print(df.head())
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## mqtt_publisher
+
+`emulation/mqtt_publisher.py` connects to an MQTT broker and streams sensor readings either as fast as possible (`simulated`) or at real sensor intervals (`realtime`).
+
+<AccordionGroup>
+  <Accordion title="create_mqtt_client()">
+    Creates and configures a `paho.mqtt.client.Client` instance with connection, disconnection, and publish callbacks pre-attached.
+
+    Sets a Last Will & Testament on `{mqtt_topic_prefix}/status` so downstream subscribers detect unexpected disconnections.
+
+    **Parameters:** none — broker settings are read from `config.settings`.
+
+    **Returns:** `paho.mqtt.client.Client` — a configured but not yet connected MQTT client.
+
+    ```python
+    from emulation.mqtt_publisher import create_mqtt_client
+    from config.settings import mqtt_broker, mqtt_port
+
+    client = create_mqtt_client()
+    client.connect(mqtt_broker, mqtt_port, keepalive=60)
+    client.loop_start()
+    ```
+  </Accordion>
+
+  <Accordion title="run_emulation(client, mode='simulated')">
+    Main emulation loop. Iterates through every simulated tick and publishes temperature, humidity, occupancy, and smart-plug readings for every room and appliance.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `client` | `paho.mqtt.client.Client` | A connected MQTT client, typically from `create_mqtt_client()`. |
+    | `mode` | `str` | `'simulated'` steps through data as fast as possible; `'realtime'` sleeps between ticks at the smart-plug interval. Defaults to `'simulated'`. |
+
+    **Returns:** `None`. Publishes a status message on `{mqtt_topic_prefix}/status` at start and completion.
+
+    **Topic structure published:**
+
+    - `home/{room}/temperature`
+    - `home/{room}/humidity`
+    - `home/{room}/occupancy`
+    - `home/{room}/appliance/{appliance_name}`
+
+    ```python
+    from emulation.mqtt_publisher import create_mqtt_client, run_emulation
+    from config.settings import mqtt_broker, mqtt_port
+
+    client = create_mqtt_client()
+    client.connect(mqtt_broker, mqtt_port, keepalive=60)
+    client.loop_start()
+    run_emulation(client, mode='simulated')
+    client.loop_stop()
+    client.disconnect()
+    ```
+
+    <Note>Use `mode='simulated'` for reproducible dataset generation. Use `mode='realtime'` only when demonstrating live MQTT behaviour.</Note>
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## sensor_tests
+
+`emulation/sensor_tests.py` validates the quality and realism of a generated dataset. All functions accept a `pandas.DataFrame` in the format returned by `generate_dataset`.
+
+<AccordionGroup>
+  <Accordion title="test_summary_stats(df)">
+    Prints summary statistics for every sensor column and checks dataset completeness against the expected number of intervals.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `df` | `pandas.DataFrame` | Dataset returned by `generate_dataset()`. |
+
+    **Returns:** `float` — completeness percentage (records received / records expected × 100).
+
+    ```python
+    from emulation.sensor_tests import test_summary_stats
+
+    completeness = test_summary_stats(df)
+    print(f"Dataset completeness: {completeness:.1f}%")
+    ```
+  </Accordion>
+
+  <Accordion title="test_time_patterns(df)">
+    Plots 24-hour average profiles for temperature, humidity, occupancy, and total power, grouped by room. Saves the plot to `{output_dir}temporal_profiles.png`.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `df` | `pandas.DataFrame` | Dataset returned by `generate_dataset()`. |
+
+    **Returns:** `None`. Side effect: saves `temporal_profiles.png`.
+
+    ```python
+    from emulation.sensor_tests import test_time_patterns
+
+    test_time_patterns(df)
+    ```
+  </Accordion>
+
+  <Accordion title="test_weekday_weekend(df)">
+    Compares weekday and weekend patterns for occupancy count, total power, and mean temperature. Saves the plot to `{output_dir}weekday_weekend.png`.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `df` | `pandas.DataFrame` | Dataset returned by `generate_dataset()`. |
+
+    **Returns:** `None`. Side effect: saves `weekday_weekend.png`.
+
+    ```python
+    from emulation.sensor_tests import test_weekday_weekend
+
+    test_weekday_weekend(df)
+    ```
+  </Accordion>
+
+  <Accordion title="test_all_appliances(df)">
+    Runs realism checks for every appliance using `test_appliance_realism`. For each appliance the checks cover: maximum power, mean power range, activations per day, unoccupied activation rate, peak versus off-peak ratio, and zero-reading percentage.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `df` | `pandas.DataFrame` | Dataset returned by `generate_dataset()`. |
+
+    **Returns:** `tuple[int, int]` — `(total_passed, total_checks)` across all appliances.
+
+    ```python
+    from emulation.sensor_tests import test_all_appliances
+
+    passed, total = test_all_appliances(df)
+    print(f"Appliance realism: {passed}/{total} checks passed")
+    ```
+  </Accordion>
+
+  <Accordion title="test_correlations(df)">
+    Generates a correlation heatmap for the eight engineered feature columns and prints correlation strengths with `total_power`. Saves the plot to `{output_dir}correlation_heatmap.png`.
+
+    Features included: `hour`, `day_of_week`, `is_weekend`, `mean_temperature`, `mean_humidity`, `occupancy_count`, `active_appliances`, `total_power`.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `df` | `pandas.DataFrame` | Dataset returned by `generate_dataset()`. |
+
+    **Returns:** `None`. Side effect: saves `correlation_heatmap.png`.
+
+    ```python
+    from emulation.sensor_tests import test_correlations
+
+    test_correlations(df)
+    ```
+  </Accordion>
+
+  <Accordion title="test_full_timeseries(df)">
+    Plots the complete time series for mean temperature, mean humidity, occupancy count, and total power, with weekend periods shaded. Saves the plot to `{output_dir}full_timeseries.png`.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `df` | `pandas.DataFrame` | Dataset returned by `generate_dataset()`. |
+
+    **Returns:** `None`. Side effect: saves `full_timeseries.png`.
+
+    ```python
+    from emulation.sensor_tests import test_full_timeseries
+
+    test_full_timeseries(df)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Sensor submodules
+
+Each sensor submodule exposes one or two public functions. They are called by both `generate_dataset` and `run_emulation`.
+
+### Temperature — `emulation/sensors/temperature.py`
+
+<AccordionGroup>
+  <Accordion title="generate_temperature(room, hour, day_of_week, noise=0.5)">
+    Generates a temperature reading for a given room and time, using a sinusoidal daily pattern (coolest at 05:00, warmest at 15:00), room-specific activity boosts (kitchen at meal hours, bathroom in morning/evening), and Gaussian noise.
+
+    **Room baselines:**
+
+    | Room | Base (°C) | Amplitude (°C) |
+    |---|---|---|
+    | `bedroom` | 18.0 | 1.5 |
+    | `living_room` | 20.0 | 2.0 |
+    | `bathroom` | 22.0 | 2.5 |
+    | `kitchen` | 21.0 | 3.0 |
+    | `studio` | 20.5 | 2.0 |
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `room` | `str` | One of `bedroom`, `living_room`, `bathroom`, `kitchen`, `studio`. |
+    | `hour` | `int` | Hour of day (0–23). |
+    | `day_of_week` | `int` | Day of week (0 = Monday, 6 = Sunday). |
+    | `noise` | `float` | Standard deviation of Gaussian noise added. Defaults to `0.5`. |
+
+    **Returns:** `float` — temperature in °C, rounded to one decimal place.
+
+    ```python
+    from emulation.sensors.temperature import generate_temperature
+
+    temp = generate_temperature('kitchen', hour=18, day_of_week=0)
+    print(f"Kitchen temperature: {temp}°C")
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Humidity — `emulation/sensors/humidity.py`
+
+<AccordionGroup>
+  <Accordion title="generate_humidity(room, hour, temperature, noise=2.0)">
+    Generates a humidity reading that is negatively correlated with temperature (`−0.5 × (temperature − 20)`), with activity boosts for kitchen and bathroom at peak-use hours. The result is clipped to the realistic range 20–95 %.
+
+    **Room baselines:**
+
+    | Room | Base (%) | Amplitude (%) |
+    |---|---|---|
+    | `bedroom` | 40 | 5 |
+    | `living_room` | 45 | 5 |
+    | `bathroom` | 55 | 15 |
+    | `kitchen` | 50 | 10 |
+    | `studio` | 42 | 5 |
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `room` | `str` | One of `bedroom`, `living_room`, `bathroom`, `kitchen`, `studio`. |
+    | `hour` | `int` | Hour of day (0–23). |
+    | `temperature` | `float` | Current temperature reading for the room (°C). |
+    | `noise` | `float` | Standard deviation of Gaussian noise added. Defaults to `2.0`. |
+
+    **Returns:** `float` — relative humidity in %, clipped to [20, 95] and rounded to one decimal place.
+
+    ```python
+    from emulation.sensors.humidity import generate_humidity
+
+    hum = generate_humidity('bathroom', hour=7, temperature=23.5)
+    print(f"Bathroom humidity: {hum}%")
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Occupancy — `emulation/sensors/occupancy.py`
+
+<AccordionGroup>
+  <Accordion title="generate_occupancy(room, hour, is_weekend)">
+    Samples a Bernoulli random variable using room- and time-specific occupancy probabilities. Separate probability tables are defined for weekdays and weekends, encoding typical occupancy patterns (e.g., bedroom occupied at night, studio occupied during working hours on weekdays).
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `room` | `str` | One of `bedroom`, `living_room`, `bathroom`, `kitchen`, `studio`. |
+    | `hour` | `int` | Hour of day (0–23). |
+    | `is_weekend` | `bool` | `True` if Saturday or Sunday. |
+
+    **Returns:** `int` — `1` if occupied, `0` if unoccupied.
+
+    ```python
+    from emulation.sensors.occupancy import generate_occupancy
+
+    occ = generate_occupancy('living_room', hour=20, is_weekend=False)
+    print(f"Living room occupied: {bool(occ)}")
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Smart plug — `emulation/sensors/smart_plug.py`
+
+<AccordionGroup>
+  <Accordion title="generate_power(appliance, hour, occupancy, weekend=False, noise=5.0)">
+    Simulates power consumption for an appliance. Always-on appliances (e.g., `refrigerator`) cycle independently of occupancy. For all other appliances the function returns the standby power when the home is unoccupied, and otherwise samples an activation probability from the per-appliance schedule before returning either active or standby power.
+
+    **Appliance profiles:**
+
+    | Appliance | Standby (W) | Active (W) | Always on |
+    |---|---|---|---|
+    | `washing_machine` | 0 | 500 | No |
+    | `refrigerator` | 50 | 120 (cycle) | Yes |
+    | `television` | 5 | 100 | No |
+    | `microwave` | 0 | 800 | No |
+    | `kettle` | 0 | 2200 | No |
+    | `computer` | 5 | 150 | No |
+    | `dishwasher` | 0 | 1200 | No |
+    | `lighting` | 0 | 60 | No |
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `appliance` | `str` | Appliance name from the profile table above. |
+    | `hour` | `int` | Hour of day (0–23). |
+    | `occupancy` | `bool` or `int` | Whether anyone is currently home. |
+    | `weekend` | `bool` | `True` if Saturday or Sunday. Defaults to `False`. |
+    | `noise` | `float` | Standard deviation of Gaussian noise added to active readings. Defaults to `5.0`. |
+
+    **Returns:** `float` — power consumption in W, clipped to the appliance maximum.
+
+    ```python
+    from emulation.sensors.smart_plug import generate_power
+
+    power = generate_power('television', hour=20, occupancy=True, weekend=False)
+    print(f"TV power: {power}W")
+    ```
+  </Accordion>
+
+  <Accordion title="apply_anomalies(appliance, power)">
+    Optionally injects a power anomaly into a reading. When the appliance is active (power > 10 W), it may spike the reading by 1.5–3× up to the appliance maximum. When the appliance is inactive, it may inject a phantom load drawn from the appliance's standby profile.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `appliance` | `str` | Appliance name. |
+    | `power` | `float` | Base power reading from `generate_power`. |
+
+    **Returns:** `float` — power reading, possibly modified by an anomaly.
+
+    ```python
+    from emulation.sensors.smart_plug import generate_power, apply_anomalies
+
+    power = generate_power('kettle', hour=8, occupancy=True)
+    power = apply_anomalies('kettle', power)
+    ```
+
+    <Tip>Anomaly rates are controlled by `anomaly_rate_active` and `anomaly_rate_inactive` in `config.settings`.</Tip>
+  </Accordion>
+</AccordionGroup>

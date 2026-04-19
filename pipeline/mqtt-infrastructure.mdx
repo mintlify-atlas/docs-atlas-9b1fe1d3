@@ -1,0 +1,141 @@
+---
+title: "Phase 2: MQTT sensor data streaming"
+description: "Stream smart home sensor readings in real time via a Mosquitto MQTT broker using Phase 2. Learn about publisher, subscriber, and topic configuration."
+---
+
+Phase 2 streams the same synthetic sensor readings produced by Phase 1 through a live MQTT broker, simulating a real IoT deployment. The publisher generates readings tick by tick and pushes them to a Mosquitto broker at `localhost:1883`. A subscriber process runs in parallel to receive the messages and write them to `data/raw/` as CSV files, producing the same raw data format that Phase 3 consumes.
+
+## Prerequisites
+
+<Warning>
+Phase 2 checks reachability of the broker at startup. If the connection is refused or times out, the pipeline calls `sys.exit(1)` immediately. Start Mosquitto before running Phase 2, or use `--skip-mqtt` to omit this phase entirely.
+</Warning>
+
+You need a running Mosquitto broker before starting Phase 2:
+
+```bash
+mosquitto -v
+```
+
+The broker must be accessible at `localhost:1883`. These values come from `config/settings.py`:
+
+| Setting | Value |
+|---------|-------|
+| `mqtt_broker` | `localhost` |
+| `mqtt_port` | `1883` |
+| `mqtt_topic_prefix` | `home` |
+
+## Topic structure
+
+The publisher uses two topic patterns, both rooted at the `home` prefix:
+
+| Sensor type | Topic pattern | Example |
+|-------------|---------------|---------|
+| Temperature, humidity, occupancy | `home/{room}/{sensor_type}` | `home/kitchen/temperature` |
+| Appliance power | `home/{room}/appliance/{appliance_name}` | `home/living_room/appliance/television` |
+
+A status topic (`home/status`) is also published with a Last Will & Testament so subscribers can detect if the publisher goes offline unexpectedly.
+
+## Message payload
+
+Each message is a JSON object:
+
+**Environmental sensor:**
+
+```json
+{
+  "timestamp": "2023-01-01T00:05:00",
+  "room": "kitchen",
+  "sensor_type": "temperature",
+  "value": 19.4
+}
+```
+
+**Appliance power:**
+
+```json
+{
+  "timestamp": "2023-01-01T00:05:00",
+  "room": "living_room",
+  "sensor_type": "smart_plug",
+  "appliance": "television",
+  "value": 42.5
+}
+```
+
+## Publisher
+
+The publisher is built on `paho-mqtt`. The `create_mqtt_client()` function configures the client with connection callbacks and a Last Will & Testament, then `run_emulation()` drives the main emulation loop.
+
+```python
+from emulation.mqtt_publisher import create_mqtt_client, run_emulation
+from config.settings import mqtt_broker, mqtt_port
+
+client = create_mqtt_client()
+client.connect(mqtt_broker, mqtt_port, keepalive=60)
+client.loop_start()
+
+run_emulation(client, mode='simulated')
+
+client.loop_stop()
+client.disconnect()
+```
+
+`run_emulation()` accepts two modes:
+
+| Mode | Behaviour |
+|------|-----------|
+| `simulated` | Steps through two years of data as fast as possible. Deterministic and suitable for the full pipeline. |
+| `realtime` | Sleeps between ticks to match actual sensor intervals. Use this to demonstrate live MQTT behaviour. |
+
+## Subscriber
+
+The subscriber is launched as a subprocess by `run_all.py`:
+
+```python
+subscriber_proc = subprocess.Popen(
+    [sys.executable, '-m', 'pipeline.subscriber'],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT
+)
+```
+
+The subscriber starts two seconds before the publisher begins, and is terminated cleanly once the publisher finishes. Raw CSV data is written to `data/raw/` as messages arrive.
+
+## Running Phase 2
+
+**Run the full pipeline including MQTT:**
+
+```bash
+python run_all.py
+```
+
+**Skip MQTT and use Phase 1 output directly:**
+
+```bash
+python run_all.py --skip-mqtt
+```
+
+**Run Phase 2 in isolation (publisher only):**
+
+```bash
+python -m emulation.mqtt_publisher
+```
+
+<Note>
+When you run Phase 2 in isolation with `python -m emulation.mqtt_publisher`, the subscriber is not started automatically. The publisher will still connect and publish messages, but nothing will save them to CSV. Run the subscriber separately in another terminal if you need to capture the output.
+</Note>
+
+## Output
+
+Phase 2 writes raw sensor CSV files to:
+
+```
+data/raw/
+```
+
+The CSV format is long (one row per reading), which `pipeline.preprocess` detects automatically via `detect_format()` in Phase 3.
+
+<Tip>
+If you are developing without Mosquitto, `--skip-mqtt` instructs the pipeline to use the wide-format CSV from Phase 1 directly. Both formats are supported by Phase 3.
+</Tip>

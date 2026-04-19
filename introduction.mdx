@@ -1,0 +1,54 @@
+---
+title: "Smart Home Energy Prediction: ML pipeline overview"
+description: "Smart Home Energy Prediction is a Python pipeline that emulates sensor data, preprocesses it, and trains ML models to forecast home energy use."
+---
+
+Smart Home Energy Prediction is an end-to-end Python project that simulates smart home sensor readings, routes them through a data pipeline, and trains machine learning models to forecast household energy consumption. It is designed for experimentation: you can run the full six-phase pipeline, skip the MQTT infrastructure, or target a single phase.
+
+## What the project does
+
+The project emulates sensors across five rooms (`bedroom`, `living_room`, `bathroom`, `kitchen`, `studio`) and eight appliances over a configurable time window (730 days by default, sampled every 5 minutes). The emulated data flows through preprocessing and feature engineering stages before three ML models are trained, evaluated, and compared.
+
+The three models are:
+
+- **Linear Regression** — baseline model for interpretable predictions
+- **Random Forest** — ensemble method for capturing non-linear patterns
+- **MLP (Multi-Layer Perceptron)** — neural network for complex feature interactions
+
+## The six-phase pipeline
+
+| Phase | Name | Description |
+|-------|------|-------------|
+| 1 | Sensor emulation | Generates a synthetic dataset with emulated appliance and sensor readings, runs validation checks, and saves raw CSV data to `data/raw/` |
+| 2 | MQTT infrastructure | Publishes emulated sensor events over MQTT using `paho-mqtt` and a Mosquitto broker, with a subscriber capturing live messages |
+| 3 | Preprocessing | Cleans and transforms raw data, engineers features, and produces train/test splits saved to `data/processed/` |
+| 4 | ML training and evaluation | Trains all three models, evaluates R², RMSE, and MAE, and runs statistical significance tests between models |
+| 5 | Feature importance and decomposition | Runs permutation importance and Oh's decomposition analysis, and saves plots and CSVs to `results/` |
+| 6 | Validation | Compares emulated results against real-world datasets (if available in `data/validation/`) within a 20% tolerance |
+
+## Key technologies
+
+- **Python 3** — runtime and scripting
+- **scikit-learn** — model training and evaluation
+- **paho-mqtt** — MQTT client for sensor event publishing
+- **pandas / numpy / scipy** — data manipulation and statistical analysis
+- **matplotlib / seaborn** — visualisation and result plots
+- **Mosquitto** — open-source MQTT broker (required for Phase 2)
+- **Jupyter** — interactive exploration
+
+## Explore the project
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run the pipeline in minutes with a single command.
+  </Card>
+  <Card title="Pipeline overview" icon="diagram-project" href="/pipeline/overview">
+    Understand each phase in depth.
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/configuration/settings">
+    Adjust emulation parameters, MQTT settings, and ML targets.
+  </Card>
+  <Card title="Sensor emulation reference" icon="microchip" href="/reference/emulation">
+    See how synthetic sensor data is generated.
+  </Card>
+</CardGroup>

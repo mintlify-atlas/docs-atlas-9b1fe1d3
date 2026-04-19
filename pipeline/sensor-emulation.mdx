@@ -1,0 +1,146 @@
+---
+title: "Phase 1: Sensor data emulation"
+description: "Generate two years of synthetic smart home sensor readings — temperature, humidity, occupancy, and appliance power — using Phase 1 of the pipeline."
+---
+
+Phase 1 generates a complete synthetic dataset of smart home sensor readings that serves as the foundation for every downstream phase. The `generate_dataset()` function steps through 730 days of simulated time at 5-minute intervals, producing realistic readings for temperature, humidity, occupancy, and appliance power across five rooms and eight appliances, then validates the dataset with a suite of automated checks before saving it to disk.
+
+## Sensors and rooms
+
+The dataset covers all five rooms defined in `config/settings.py`:
+
+| Room | Sensors generated |
+|------|-------------------|
+| `bedroom` | temperature, humidity, occupancy |
+| `living_room` | temperature, humidity, occupancy |
+| `bathroom` | temperature, humidity, occupancy |
+| `kitchen` | temperature, humidity, occupancy |
+| `studio` | temperature, humidity, occupancy |
+
+Each room produces three columns in the dataset: `temperature_{room}`, `humidity_{room}`, and `occupancy_{room}`.
+
+## Appliances
+
+Smart plug power readings are generated for all eight appliances:
+
+<Columns cols={2}>
+  <Card title="Washing machine" icon="shirt">
+    High-wattage cyclic appliance, typically active during daytime hours
+  </Card>
+  <Card title="Refrigerator" icon="thermometer">
+    Always-on appliance, cycling continuously at a consistent average draw
+  </Card>
+  <Card title="Television" icon="tv">
+    Evening-weighted usage, correlated with occupancy
+  </Card>
+  <Card title="Microwave" icon="microwave">
+    Short-burst activations at meal times
+  </Card>
+  <Card title="Kettle" icon="mug-hot">
+    Brief high-power spikes concentrated in morning and afternoon
+  </Card>
+  <Card title="Computer" icon="laptop">
+    Extended active periods during working hours
+  </Card>
+  <Card title="Dishwasher" icon="soap">
+    Evening activations after meal times
+  </Card>
+  <Card title="Lighting" icon="lightbulb">
+    Morning and evening peaks, correlated with occupancy and season
+  </Card>
+</Columns>
+
+Each appliance produces a `power_{appliance}` column in the dataset (in watts).
+
+## Configuration
+
+Phase 1 uses the following settings from `config/settings.py`:
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `days_to_generate` | `730` | Two years of data |
+| `sample_freq` | `5` | Sampling interval in minutes |
+| `anomaly_rate` | `0.20` | Overall anomaly injection rate |
+| `start_time` | `2023-01-01 00:00` | Dataset start timestamp |
+| `r_seed` | `42` | Random seed for reproducibility |
+
+## Dataset columns
+
+The output CSV includes the following columns:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `timestamp` | index | 5-minute interval timestamps |
+| `hour` | int | Hour of day (0–23) |
+| `day_of_week` | int | Day index (0=Monday, 6=Sunday) |
+| `is_weekend` | int | 1 if Saturday or Sunday, else 0 |
+| `temperature_{room}` | float | Room temperature in °C (×5 rooms) |
+| `humidity_{room}` | float | Room relative humidity in % (×5 rooms) |
+| `occupancy_{room}` | int | 1 if room occupied, else 0 (×5 rooms) |
+| `power_{appliance}` | float | Appliance power draw in watts (×8 appliances) |
+| `mean_temperature` | float | Mean temperature across all rooms |
+| `mean_humidity` | float | Mean humidity across all rooms |
+| `occupancy_count` | int | Number of rooms occupied |
+| `active_appliances` | int | Number of appliances drawing >10 W |
+| `total_power` | float | Sum of all appliance power in watts |
+
+## Validation tests
+
+After generation, Phase 1 automatically runs six validation tests against the dataset:
+
+<AccordionGroup>
+  <Accordion title="test_summary_stats">
+    Prints summary statistics for every sensor column — min, max, mean, and standard deviation for temperature and humidity; occupancy rates per room; mean and max power per appliance; and overall dataset completeness as a percentage of expected records.
+  </Accordion>
+  <Accordion title="test_time_patterns">
+    Plots 24-hour average profiles for temperature, humidity, occupancy, and total power, saving them as `temporal_profiles.png`. Confirms that readings follow realistic diurnal patterns.
+  </Accordion>
+  <Accordion title="test_weekday_weekend">
+    Compares occupancy count, total power, and mean temperature patterns between weekdays and weekends, saving the comparison as `weekday_weekend.png`.
+  </Accordion>
+  <Accordion title="test_all_appliances">
+    Runs six realism checks per appliance: maximum reading against rated wattage, mean power in expected range, activations per day, unoccupied activation rate (less than 3%), peak vs. off-peak ratio, and zero/standby percentage. Reports the total number of checks passed.
+  </Accordion>
+  <Accordion title="test_correlations">
+    Generates a correlation heatmap for the eight engineered features and reports the strength of each feature's correlation with `total_power` (saved as `correlation_heatmap.png`).
+  </Accordion>
+  <Accordion title="test_full_timeseries">
+    Plots the full two-year time series for mean temperature, mean humidity, occupancy count, and total power with weekend shading. Saved as `full_timeseries.png`.
+  </Accordion>
+</AccordionGroup>
+
+## Output
+
+```
+data/raw/test_dataset.csv
+```
+
+The CSV contains 210,240 rows (730 days × 24 hours × 12 intervals/hour) and 33 columns.
+
+## Running Phase 1
+
+**As part of the full pipeline:**
+
+```bash
+python run_all.py --only 1
+```
+
+**Standalone:**
+
+```bash
+python -m emulation.generate_dataset
+```
+
+**In Python:**
+
+```python
+from emulation.generate_dataset import generate_dataset
+
+df = generate_dataset()
+print(df.shape)       # (210240, 33)
+print(df.columns.tolist())
+```
+
+<Tip>
+Run Phase 1 in isolation before Phase 2 to confirm the dataset looks realistic. The validation test output is printed to stdout and any anomalies in the test results will surface here before they affect model training.
+</Tip>

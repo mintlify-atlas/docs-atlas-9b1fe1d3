@@ -1,0 +1,193 @@
+---
+title: "Data formats: raw and processed CSV schemas"
+description: "Reference for CSV schemas in Smart Home Energy Prediction — wide-format raw sensor data, long-format MQTT output, and the engineered features dataset."
+---
+
+Every stage of the pipeline reads or writes CSVs in a well-defined schema. This page documents the exact column layout of each file so you can inspect, debug, or extend the data at any point.
+
+## data/raw/
+
+Raw sensor data written by the emulation phases lives here. Files are named by the phase that generated them. The preprocessing pipeline loads **all** `*.csv` files from this directory and concatenates them before any processing takes place.
+
+### Wide format (Phase 1 — direct generation)
+
+Phase 1 (`emulation/generate_dataset.py`) writes one row per 5-minute interval. Each sensor reading gets its own named column, giving the file its "wide" shape.
+
+```csv
+timestamp,hour,day_of_week,is_weekend,temperature_bedroom,temperature_living_room,temperature_bathroom,temperature_kitchen,temperature_studio,humidity_bedroom,humidity_living_room,humidity_bathroom,humidity_kitchen,humidity_studio,occupancy_bedroom,occupancy_living_room,occupancy_bathroom,occupancy_kitchen,occupancy_studio,power_washing_machine,power_refrigerator,power_television,power_microwave,power_kettle,power_computer,power_dishwasher,power_lighting,mean_temperature,mean_humidity,occupancy_count,active_appliances,total_power
+2023-01-01 00:00:00,0,6,1,19.2,18.7,17.1,16.8,18.3,52.1,50.4,61.3,55.8,49.7,0,0,0,0,0,0.0,42.5,0.0,0.0,0.0,0.0,0.0,15.3,18.02,53.86,0,2,57.8
+2023-01-01 00:05:00,0,6,1,19.1,18.6,17.0,16.9,18.4,52.3,50.6,61.1,55.9,49.5,0,0,0,0,0,0.0,42.5,0.0,0.0,0.0,0.0,0.0,15.3,18.00,53.88,0,2,57.8
+```
+
+<Note>
+  Wide-format files may also have an `Unnamed: 0` column if they were written with a default pandas index. The preprocessor detects and handles this automatically, using it as the timestamp index.
+</Note>
+
+**Wide format column reference**
+
+| Column | Type | Description |
+|---|---|---|
+| `timestamp` | datetime | UTC timestamp at 5-minute intervals |
+| `hour` | int | Hour of day (0–23) |
+| `day_of_week` | int | Day of week (0 = Monday, 6 = Sunday) |
+| `is_weekend` | int | 1 if Saturday or Sunday, else 0 |
+| `temperature_<room>` | float | Room temperature in °C |
+| `humidity_<room>` | float | Relative humidity (%) |
+| `occupancy_<room>` | int | Room occupancy (0 or 1) |
+| `power_<appliance>` | float | Appliance power draw in watts |
+| `mean_temperature` | float | Mean temperature across all rooms |
+| `mean_humidity` | float | Mean humidity across all rooms |
+| `occupancy_count` | int | Number of rooms currently occupied |
+| `active_appliances` | int | Number of appliances drawing >10 W |
+| `total_power` | float | Sum of all appliance power in watts |
+
+Rooms: `bedroom`, `living_room`, `bathroom`, `kitchen`, `studio`
+
+Appliances: `washing_machine`, `refrigerator`, `television`, `microwave`, `kettle`, `computer`, `dishwasher`, `lighting`
+
+### Long format (Phase 2 — MQTT)
+
+Phase 2 emits one measurement per row. This is the format written by the MQTT subscriber and is significantly more rows than the equivalent wide-format file.
+
+```csv
+timestamp,room,sensor_type,appliance,value
+2023-01-01 00:00:00,bedroom,temperature,,19.2
+2023-01-01 00:00:00,living_room,humidity,,50.4
+2023-01-01 00:00:00,bedroom,occupancy,,0
+2023-01-01 00:00:00,,power,washing_machine,0.0
+2023-01-01 00:00:00,,power,refrigerator,42.5
+```
+
+**Long format column reference**
+
+| Column | Type | Description |
+|---|---|---|
+| `timestamp` | datetime | Measurement timestamp |
+| `room` | string | Room name; empty for appliance rows |
+| `sensor_type` | string | `temperature`, `humidity`, `occupancy`, or `power` |
+| `appliance` | string | Appliance name; empty for environmental rows |
+| `value` | float | Sensor reading in native units |
+
+### Format detection
+
+`detect_format()` in `pipeline/preprocess.py` reads the first three rows of the first CSV file and inspects the column names:
+
+```python
+def detect_format(filepath):
+    df_sample = pd.read_csv(filepath, nrows=3)
+    cols = df_sample.columns.tolist()
+
+    has_sensor_cols = any(c.startswith('temperature_') for c in cols)
+    has_power_cols = any(c.startswith('power_') for c in cols)
+
+    if has_sensor_cols and has_power_cols:
+        return 'wide'
+
+    has_long_cols = ('sensor_type' in cols or 'room' in cols)
+    if has_long_cols:
+        return 'long'
+
+    return 'wide'  # default
+```
+
+<AccordionGroup>
+  <Accordion title="Wide format detection">
+    A file is classified as wide when it has **both** a column prefixed `temperature_` **and** a column prefixed `power_`. This matches the direct-generation schema exactly.
+  </Accordion>
+  <Accordion title="Long format detection">
+    A file is classified as long when it contains a `sensor_type` or `room` column, which are absent from the wide schema.
+  </Accordion>
+  <Accordion title="Default fallback">
+    If neither test matches, the file is treated as wide. This prevents the pipeline from failing on lightly malformed headers.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## data/processed/
+
+After preprocessing, two CSV files and four NumPy split files are written to `data/processed/`.
+
+### wide_data.csv
+
+Produced by `run_preprocessing()`. If the raw input was long format, this file is the result of pivoting and resampling to 5-minute intervals. If the raw input was already wide, this file is the cleaned and concatenated version.
+
+The schema mirrors the wide-format raw file (minus the pre-computed derived columns), with `timestamp` as the index.
+
+```csv
+timestamp,temperature_bedroom,temperature_living_room,...,power_lighting
+2023-01-01 00:00:00,19.2,18.7,...,15.3
+```
+
+### features_data.csv
+
+Produced by `engineer_features()`. Contains exactly eight engineered columns derived from `wide_data.csv`. This is the file consumed by the model training pipeline.
+
+```csv
+timestamp,hour,day_of_week,is_weekend,mean_temperature,mean_humidity,occupancy_count,active_appliances,total_power
+2023-01-01 00:00:00,0,6,1,18.02,53.86,0,2,57.8
+2023-01-01 00:05:00,0,6,1,18.00,53.88,0,2,57.8
+```
+
+**Engineered feature column reference**
+
+| Column | Type | Description |
+|---|---|---|
+| `hour` | int | Hour extracted from the timestamp index (0–23) |
+| `day_of_week` | int | Day of week from the timestamp index (0–6) |
+| `is_weekend` | int | 1 if `day_of_week` ≥ 5, else 0 |
+| `mean_temperature` | float | Mean of all `temperature_<room>` columns, rounded to 2 dp |
+| `mean_humidity` | float | Mean of all `humidity_<room>` columns, rounded to 2 dp |
+| `occupancy_count` | int | Sum of all `occupancy_<room>` columns |
+| `active_appliances` | int | Count of `power_<appliance>` columns where value > 10 W |
+| `total_power` | float | Sum of all `power_<appliance>` columns, rounded to 1 dp; this is the **model target** |
+
+<Tip>
+  `total_power` is both an engineered feature in `features_data.csv` and the target variable used during training. The split step separates it from the feature matrix automatically.
+</Tip>
+
+### Split files
+
+`save_split()` in `pipeline/split.py` writes six files after the temporal train/test split (80% train, 20% test):
+
+```python
+np.save('data/processed/X_train.npy', X_train)
+np.save('data/processed/X_test.npy', X_test)
+np.save('data/processed/y_train.npy', y_train)
+np.save('data/processed/y_test.npy', y_test)
+
+with open('data/processed/scaler.pkl', 'wb') as f:
+    pickle.dump(scaler, f)
+with open('data/processed/feature_cols.pkl', 'wb') as f:
+    pickle.dump(feature_cols, f)
+```
+
+| File | Format | Contents |
+|---|---|---|
+| `X_train.npy` | NumPy array | Scaled feature matrix for the training set |
+| `X_test.npy` | NumPy array | Scaled feature matrix for the test set |
+| `y_train.npy` | NumPy array | `total_power` target values for the training set |
+| `y_test.npy` | NumPy array | `total_power` target values for the test set |
+| `scaler.pkl` | pickle | Fitted `StandardScaler` instance |
+| `feature_cols.pkl` | pickle | Ordered list of feature column names |
+
+<Note>
+  The split is temporal: the test set is always the **most recent 20%** of rows. This preserves time-series integrity and ensures models are evaluated on future data rather than randomly sampled points.
+</Note>
+
+---
+
+## data/validation/
+
+This directory is the input location for real-world datasets used in Phase 6 validation. The pipeline looks for two specific filenames:
+
+<CardGroup cols={2}>
+  <Card title="UCI Appliances Energy" icon="database">
+    Place `energydata_complete.csv` here. Download from the UCI Machine Learning Repository (dataset ID 374).
+  </Card>
+  <Card title="Kaggle Smart Home" icon="database">
+    Place `HomeC.csv` here. Download from the Kaggle Smart Home Dataset with Weather Information.
+  </Card>
+</CardGroup>
+
+If neither file is present when `analysis/validation.py` runs, the module logs a warning and returns an empty results list without raising an error. Validation outputs are written to `results/` alongside model results.

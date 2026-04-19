@@ -1,0 +1,149 @@
+---
+title: "Phase 5 & 6: Feature analysis and validation"
+description: "Run permutation importance and Oh's decomposition to interpret energy prediction models, then validate predictions against real-world datasets."
+---
+
+Phases 5 and 6 provide interpretability and validation for the trained models. Phase 5 answers the question of which features actually matter for predicting energy consumption, using two complementary methods: permutation importance with statistical significance testing, and Oh's decomposition to separate direct feature contributions from interaction effects. Phase 6 compares the emulated data distributions against real-world smart home datasets to assess how realistic the synthetic data is.
+
+## Phase 5: Feature importance
+
+### Permutation importance
+
+`run_permutation_importance()` shuffles each feature 50 times across all trained models and measures the resulting drop in R² score. A t-test determines whether each feature's importance is statistically significant.
+
+```python
+from analysis.feature_importance import (
+    run_permutation_importance,
+    save_importance_data,
+    plot_importance_bars,
+    plot_importance_heatmap,
+)
+
+all_importance = run_permutation_importance(trained, X_test, y_test, feature_cols)
+save_importance_data(all_importance)
+plot_importance_bars(all_importance)
+plot_importance_heatmap(all_importance)
+```
+
+The significance threshold is `p < 0.05`, set by `significance = 0.05` in `config/settings.py`. Features with `significant=True` in the output indicate a statistically reliable contribution to the model's predictions.
+
+Each entry in the importance list contains:
+
+| Key | Description |
+|-----|-------------|
+| `feature` | Feature name |
+| `mean_importance` | Mean R² decrease across 50 repeats |
+| `std_importance` | Standard deviation of R² decrease |
+| `t_stat` | t-statistic for significance test |
+| `p_value` | p-value (one-tailed) |
+| `significant` | `True` if `p_value < 0.05` |
+| `rank` | Rank by mean importance (1 = most important) |
+
+**Permutation importance outputs:**
+
+| File | Description |
+|------|-------------|
+| `results/permutation_importance.csv` | Importance scores and significance per feature per model |
+| `results/permutation_importance.png` | Horizontal bar charts with error bars; red = significant, blue = not significant |
+| `results/importance_heatmap.png` | Heatmap of mean importance across all models |
+
+### Oh's decomposition
+
+`run_oh_decomposition()` applies the Oh (2022) decomposition method to separate each feature's importance into two components:
+
+- **Feature power** — the direct, independent contribution of the feature to predictions
+- **Interaction power** — the additional contribution through interactions with other features
+
+The method works by comparing model performance under three conditions: all features present (baseline), the target feature shuffled, and all other features shuffled. The difference between these conditions isolates the direct and interactive contributions.
+
+```python
+from analysis.decomposition import (
+    run_oh_decomposition,
+    save_decomposition_csv,
+    plot_decomposition_bars,
+    plot_decomposition_stacked,
+)
+
+all_decomposition = run_oh_decomposition(trained, X_test, y_test, feature_cols)
+save_decomposition_csv(all_decomposition)
+plot_decomposition_bars(all_decomposition)
+plot_decomposition_stacked(all_decomposition)
+```
+
+The number of repeats defaults to `permutation_repeats = 50` from `config/settings.py`.
+
+**Oh's decomposition outputs:**
+
+| File | Description |
+|------|-------------|
+| `results/oh_decomposition.csv` | Feature power, interaction power, and total importance per model |
+| `results/oh_decomposition.png` | Side-by-side bars for feature power and interaction power |
+| `results/oh_decomposition_stacked.png` | Stacked bars showing the proportion of independent vs. interaction contribution |
+
+## Phase 6: Real-world validation
+
+Phase 6 compares the emulated feature distributions against two real-world smart home datasets using the Kolmogorov-Smirnov (KS) test and a ±20% mean tolerance check.
+
+```python
+from analysis.validation import run_validation
+
+results = run_validation()
+```
+
+`run_validation()` loads `data/processed/features_data.csv` and looks for the following dataset files in `data/validation/`:
+
+| Dataset | Expected file | Source |
+|---------|---------------|--------|
+| UCI Appliances Energy Prediction | `data/validation/energydata_complete.csv` | [UCI ML Repository](https://archive.ics.uci.edu/dataset/374/appliances+energy+prediction) |
+| Kaggle Smart Home Dataset | `data/validation/HomeC.csv` | [Kaggle](https://www.kaggle.com/datasets/taranvee/smart-home-dataset-with-weather-information) |
+
+For each feature compared, the validation result includes:
+
+| Key | Description |
+|-----|-------------|
+| `pct_difference` | Absolute percentage difference between emulated and real means |
+| `within_tolerance` | `True` if `pct_difference ≤ 20%` |
+| `ks_statistic` | KS test statistic (0 = identical, 1 = completely different) |
+| `ks_p_value` | KS test p-value |
+| `ks_result` | `Very Similar distributions`, `Moderately Similar distributions`, or `Substantially different distributions` |
+
+The tolerance threshold comes from `validation_tolerance = 0.20` in `config/settings.py`.
+
+**Validation outputs:**
+
+| File | Description |
+|------|-------------|
+| `results/validation_results.csv` | Full validation results per feature per dataset |
+| `results/validation_summary.png` | Mean % difference and KS statistic bar charts with pass/fail colouring |
+| `results/distribution_comparison_{dataset}.png` | Overlaid histograms comparing emulated and real distributions per feature |
+
+<Warning>
+Phase 6 returns an empty list and logs a warning if neither dataset file is found in `data/validation/`. Download the required files and place them there before running Phase 6. The pipeline does not fail — it simply skips validation and reports that no datasets were found.
+</Warning>
+
+## Running Phase 5 and 6
+
+**As part of the pipeline:**
+
+```bash
+python run_all.py --only 5
+python run_all.py --only 6
+```
+
+**Both phases from Phase 5 onwards:**
+
+```bash
+python run_all.py --start-from 5
+```
+
+**Standalone:**
+
+```bash
+python -m analysis.feature_importance
+python -m analysis.decomposition
+python -m analysis.validation
+```
+
+<Note>
+Phase 5 requires `results/trained_models.pkl` and the split files in `data/processed/`. Run Phase 3 and Phase 4 first, or use `python run_all.py --start-from 3` to regenerate them.
+</Note>

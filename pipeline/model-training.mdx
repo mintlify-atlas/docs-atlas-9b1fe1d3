@@ -1,0 +1,134 @@
+---
+title: "Phase 4: ML model training and evaluation"
+description: "Train Linear Regression, Random Forest, and MLP Regressor models with GridSearchCV tuning. Evaluate with R², RMSE, and MAE against dissertation targets."
+---
+
+Phase 4 trains three regression models on the preprocessed feature matrix and evaluates them against defined performance targets. Random Forest and MLP Regressor models undergo automated hyperparameter tuning with `GridSearchCV` and 5-fold cross-validation. Every model is then evaluated with three metrics, and pairwise paired t-tests determine which performance differences are statistically significant.
+
+## Models
+
+<CardGroup cols={3}>
+  <Card title="Linear Regression" icon="chart-line">
+    Baseline model. No hyperparameters to tune. Trained directly on the scaled feature matrix.
+  </Card>
+  <Card title="Random Forest" icon="tree">
+    Ensemble of decision trees. Tuned with GridSearchCV across 27 hyperparameter combinations.
+  </Card>
+  <Card title="MLP Regressor" icon="brain">
+    Feedforward neural network. Tuned with GridSearchCV across 12 hyperparameter combinations.
+  </Card>
+</CardGroup>
+
+## Hyperparameter grids
+
+### Random Forest
+
+| Hyperparameter | Values searched |
+|----------------|-----------------|
+| `n_estimators` | `100`, `200`, `500` |
+| `max_depth` | `10`, `20`, `None` |
+| `min_samples_split` | `2`, `5`, `10` |
+
+Total combinations: 27 × 5 folds = **135 training runs**.
+
+### MLP Regressor
+
+| Hyperparameter | Values searched |
+|----------------|-----------------|
+| `hidden_layer_sizes` | `(64, 32)`, `(128, 64)`, `(128, 64, 32)` |
+| `activation` | `relu`, `tanh` |
+| `learning_rate_init` | `0.001`, `0.01` |
+
+Total combinations: 12 × 5 folds = **60 training runs**.
+
+The MLP is configured with `max_iter=500`, `early_stopping=True`, `validation_fraction=0.1`, and `n_iter_no_change=20` to prevent overfitting.
+
+<Note>
+Linear Regression has no hyperparameter grid and is fitted directly without cross-validation. Its `cv_score` is reported as `N/A` in the results.
+</Note>
+
+## Training
+
+`train_all_models()` iterates over all three model definitions returned by `get_models_and_params()`, calls `train_single_model()` for each, and returns a results dictionary keyed by model name:
+
+```python
+from pipeline.split import load_split
+from models.train import train_all_models, save_models
+
+X_train, y_train, X_test, y_test, scaler, feature_cols = load_split('data/processed')
+trained = train_all_models(X_train, y_train)
+save_models(trained)
+```
+
+## Evaluation metrics and targets
+
+Each model is evaluated with three metrics. Targets are defined in `config/settings.py`:
+
+| Metric | Target | Setting |
+|--------|--------|---------|
+| R² (coefficient of determination) | ≥ 0.70 | `r2_target = 0.70` |
+| RMSE (root mean squared error) | ≤ 100 W | `rmse_target = 100` |
+| MAE (mean absolute error) | ≤ 70 W | `mae_target = 70` |
+
+`evaluate_all_models()` calls `evaluate_model()` for each trained model and records whether it meets each target:
+
+```python
+from models.evaluate import evaluate_all_models
+
+eval_result, comparisons = evaluate_all_models(trained, X_test, y_test)
+```
+
+## Statistical comparison
+
+`compare_models()` runs pairwise **paired t-tests** on the absolute errors of each model pair. A difference is considered statistically significant when `p < 0.05` (controlled by `significance = 0.05` in `config/settings.py`).
+
+```python
+# comparisons is a list of dicts with keys:
+# Model_A, Model_B, MAE_A, MAE_B, t_statistic, p_value, significant, better_model
+for comp in comparisons:
+    if comp['significant']:
+        print(f"{comp['Model_A']} vs {comp['Model_B']}: p={comp['p_value']:.4f}")
+```
+
+## Output files
+
+| File | Description |
+|------|-------------|
+| `results/trained_models.pkl` | All trained model objects and metadata |
+| `results/LinearRegression_model.pkl` | Individual model file |
+| `results/RandomForest_model.pkl` | Individual model file |
+| `results/MLPRegressor_model.pkl` | Individual model file |
+| `results/evaluation_metrics.csv` | R², RMSE, MAE per model with target pass/fail |
+| `results/model_comparisons.csv` | Pairwise t-test results |
+
+## Output plots
+
+| File | Description |
+|------|-------------|
+| `results/prediction_vs_actual.png` | Scatter plots of predicted vs. actual power for each model |
+| `results/residual_analysis.png` | Residual histograms and residuals over time |
+| `results/model_comparison_bars.png` | Bar charts comparing R², RMSE, and MAE with target lines |
+
+## Running Phase 4
+
+**As part of the pipeline:**
+
+```bash
+python run_all.py --only 4
+```
+
+**Train models standalone:**
+
+```bash
+python -m models.train
+```
+
+**Evaluate models standalone (requires `trained_models.pkl`):**
+
+```bash
+python -m models.evaluate
+```
+
+<Warning>
+Phase 4 requires the split files in `data/processed/` (produced by Phase 3). Run `python run_all.py --start-from 3` to regenerate them if they are missing.
+</Warning>

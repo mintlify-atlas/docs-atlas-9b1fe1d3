@@ -1,0 +1,137 @@
+---
+title: "Global pipeline settings reference"
+description: "Complete reference for config/settings.py — all emulation parameters, MQTT settings, ML targets, and validation tolerances used by every pipeline phase."
+---
+
+The `config/settings.py` file is the single source of truth for all pipeline parameters. Every phase — emulation, MQTT brokering, preprocessing, model training, and evaluation — reads its configuration from this module. Changing a value here propagates automatically to every component that imports it.
+
+## Emulation parameters
+
+These settings control how synthetic sensor data is generated.
+
+| Setting | Default | Description |
+|---|---|---|
+| `rooms` | `['bedroom','living_room','bathroom','kitchen','studio']` | Rooms for which sensor readings are generated |
+| `days_to_generate` | `730` | Total days of synthetic data to produce (two years) |
+| `sample_freq` | `5` | Sampling frequency in minutes for the main dataset |
+| `start_time` | `datetime(2023,1,1,0,0)` | Start timestamp for the generated time series |
+| `intervals` | `days_to_generate * 24 * (60 // sample_freq)` | Total number of time steps, derived automatically |
+| `anomaly_rate` | `0.20` | Overall anomaly injection probability |
+| `anomaly_rate_active` | `0.10` | Anomaly probability when an appliance is active (power > 10 W) |
+| `anomaly_rate_inactive` | `0.015` | Phantom-load anomaly probability when an appliance is off |
+| `r_seed` | `42` | NumPy random seed for reproducible data generation |
+
+<Tip>
+Set `r_seed` to a fixed integer before generating data. Every run with the same seed produces identical output, which is essential for reproducible experiments and fair model comparisons.
+</Tip>
+
+## Sensor intervals
+
+Each sensor type publishes readings at its own interval over MQTT. Values are in seconds.
+
+| Setting | Default | Sensor |
+|---|---|---|
+| `temp_interval` | `30` | Temperature sensor polling interval |
+| `hum_interval` | `30` | Humidity sensor polling interval |
+| `occ_interval` | `10` | Occupancy sensor polling interval |
+| `sp_interval` | `5` | Smart plug power sensor polling interval |
+
+## MQTT settings
+
+| Setting | Default | Description |
+|---|---|---|
+| `mqtt_broker` | `'localhost'` | Hostname or IP address of the MQTT broker |
+| `mqtt_port` | `1883` | MQTT broker port (standard unencrypted port) |
+| `mqtt_topic_prefix` | `'home'` | Prefix prepended to all MQTT topic paths |
+
+## Appliances & rooms
+
+```python settings.py
+rooms = ['bedroom', 'living_room', 'bathroom', 'kitchen', 'studio']
+
+appliances = [
+    'washing_machine', 'refrigerator', 'television', 'microwave',
+    'kettle', 'computer', 'dishwasher', 'lighting'
+]
+```
+
+## ML settings
+
+| Setting | Default | Description |
+|---|---|---|
+| `test_ratio` | `0.2` | Fraction of data reserved for the held-out test set |
+| `folds` | `5` | Number of cross-validation folds used in `GridSearchCV` |
+
+## Evaluation targets
+
+These thresholds define what counts as a passing model. The evaluation phase compares each trained model's metrics against them.
+
+| Setting | Default | Description |
+|---|---|---|
+| `r2_target` | `0.70` | Minimum acceptable R² score |
+| `rmse_target` | `100` | Maximum acceptable RMSE in watts |
+| `mae_target` | `70` | Maximum acceptable MAE in watts |
+| `significance` | `0.05` | p-value threshold for statistical significance tests |
+| `permutation_repeats` | `50` | Number of repeats for permutation feature importance |
+
+## Validation
+
+| Setting | Default | Description |
+|---|---|---|
+| `validation_tolerance` | `0.20` | Allowed relative deviation (±20%) when cross-checking emulated sensor values against expected ranges |
+
+## Full file
+
+```python config/settings.py
+# Configuration File
+import os
+import numpy as np
+from datetime import datetime
+
+# Output directory
+output_dir = 'results/'
+
+# Emulation Parameters
+rooms = ['bedroom','living_room','bathroom','kitchen','studio']
+days_to_generate = 730
+sample_freq = 5  # minutes
+start_time = datetime(2023,1,1,0,0)
+intervals = days_to_generate * 24 * (60 // sample_freq)
+anomaly_rate = 0.20
+anomaly_rate_active = 0.10
+anomaly_rate_inactive = 0.015
+r_seed = 42
+np.random.seed(r_seed)
+os.makedirs(output_dir, exist_ok=True)
+
+# Sensor intervals (seconds)
+temp_interval = 30
+hum_interval = 30
+occ_interval = 10
+sp_interval = 5
+
+# Anomalies
+an_rate = 0.02
+
+# MQTT
+mqtt_broker = 'localhost'
+mqtt_port = 1883
+mqtt_topic_prefix = 'home'
+
+# Appliances
+appliances = ['washing_machine','refrigerator','television','microwave','kettle','computer','dishwasher','lighting']
+
+# Machine Learning settings
+test_ratio = 0.2
+folds = 5
+
+# Evaluation metrics
+r2_target = 0.70
+rmse_target = 100
+mae_target = 70
+significance = 0.05
+permutation_repeats = 50
+
+# Validation
+validation_tolerance = 0.20
+```

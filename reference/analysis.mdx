@@ -1,0 +1,302 @@
+---
+title: "analysis module: importance and validation"
+description: "API reference for the analysis module — permutation importance, Oh decomposition, and run_validation for interpreting and validating prediction models."
+---
+
+The `analysis` module provides three interpretability and validation tools. `feature_importance.py` measures how much each feature contributes to model R² using permutation importance with statistical significance testing. `decomposition.py` decomposes each feature's importance into an independent component and an interaction component following the Oh (2022) method. `validation.py` compares emulated sensor distributions against two real-world datasets using the Kolmogorov–Smirnov test and a percentage-difference tolerance check.
+
+## feature_importance
+
+`analysis/feature_importance.py`
+
+<AccordionGroup>
+  <Accordion title="calc_permutation_importance(model, X_test, y_test, feature_names, model_name)">
+    Computes permutation importance for every feature of a single model. Each feature is shuffled `permutation_repeats` times (from `config.settings`), and the mean drop in R² is recorded. A one-sample t-test determines whether each feature's importance is statistically significant.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `model` | estimator | A fitted scikit-learn estimator. |
+    | `X_test` | `numpy.ndarray` | Scaled test features. |
+    | `y_test` | `numpy.ndarray` | True test targets. |
+    | `feature_names` | `list[str]` | Names of the feature columns, in the same order as columns in `X_test`. |
+    | `model_name` | `str` | Label for the model, used in output records. Defaults to `'Model'`. |
+
+    **Returns:** `list[dict]` — one dict per feature, sorted by `mean_importance` descending:
+
+    | Key | Type | Description |
+    |---|---|---|
+    | `model` | `str` | Model name. |
+    | `feature` | `str` | Feature name. |
+    | `mean_importance` | `float` | Mean R² decrease across permutation repeats. |
+    | `std_importance` | `float` | Standard deviation of R² decrease across repeats. |
+    | `raw_importances` | `numpy.ndarray` | Per-repeat importance values. |
+    | `t_stat` | `float` | t-statistic from the one-sample t-test. |
+    | `p_value` | `float` | One-tailed p-value. |
+    | `significant` | `bool` | `True` if `p_value < significance` threshold. |
+    | `rank` | `int` | Importance rank (1 = most important). |
+
+    ```python
+    from analysis.feature_importance import calc_permutation_importance
+
+    importance = calc_permutation_importance(
+        results['RandomForest']['estimator'],
+        X_test, y_test,
+        feature_names=feature_cols,
+        model_name='RandomForest'
+    )
+    for item in importance:
+        print(f"#{item['rank']} {item['feature']}: {item['mean_importance']:.4f}")
+    ```
+  </Accordion>
+
+  <Accordion title="run_permutation_importance(trained_res, X_test, y_test, feature_names)">
+    Runs `calc_permutation_importance` for every model in `trained_res` and collects the results.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `trained_res` | `dict` | Results dict from `train_all_models` or `load_models`. |
+    | `X_test` | `numpy.ndarray` | Scaled test features. |
+    | `y_test` | `numpy.ndarray` | True test targets. |
+    | `feature_names` | `list[str]` | Feature column names. |
+
+    **Returns:** `dict[str, list[dict]]` — model name to list of importance dicts (same schema as `calc_permutation_importance`).
+
+    ```python
+    from analysis.feature_importance import run_permutation_importance
+
+    all_importance = run_permutation_importance(
+        trained_res, X_test, y_test, feature_cols
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="save_importance_data(all_importance, output_path)">
+    Flattens the importance dicts from all models into a single CSV file, omitting the `raw_importances` array column.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `all_importance` | `dict` | Output of `run_permutation_importance`. |
+    | `output_path` | `str` | Output directory. Defaults to `results/`. |
+
+    **Returns:** `pandas.DataFrame` — the data written to disk. File saved at `results/permutation_importance.csv`.
+
+    ```python
+    from analysis.feature_importance import save_importance_data
+
+    df = save_importance_data(all_importance, 'results')
+    ```
+  </Accordion>
+
+  <Accordion title="plot_importance_bars(all_importance, output_path)">
+    Plots a horizontal bar chart per model showing mean permutation importance with error bars. Bars are coloured red if the feature is statistically significant, blue otherwise. Saves to `results/permutation_importance.png`.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `all_importance` | `dict` | Output of `run_permutation_importance`. |
+    | `output_path` | `str` | Output directory. Defaults to `results/`. |
+
+    **Returns:** `None`.
+
+    ```python
+    from analysis.feature_importance import plot_importance_bars
+
+    plot_importance_bars(all_importance, 'results')
+    ```
+  </Accordion>
+
+  <Accordion title="plot_importance_heatmap(all_importance, output_path)">
+    Renders a heatmap of mean permutation importance values with features on the y-axis and models on the x-axis. Cell values are annotated. Saves to `results/importance_heatmap.png`.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `all_importance` | `dict` | Output of `run_permutation_importance`. |
+    | `output_path` | `str` | Output directory. Defaults to `results/`. |
+
+    **Returns:** `None`.
+
+    ```python
+    from analysis.feature_importance import plot_importance_heatmap
+
+    plot_importance_heatmap(all_importance, 'results')
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## decomposition
+
+`analysis/decomposition.py` — Oh (2022) feature power interaction decomposition.
+
+For each feature, the method measures:
+- **Feature power** — the model's independent reliance on that feature (all other features permuted).
+- **Interaction power** — the additional contribution that comes from correlations with other features (`total_importance − feature_power`, floored at zero).
+- **Total importance** — the overall MAE increase when only that feature is permuted.
+
+<AccordionGroup>
+  <Accordion title="run_oh_decomposition(trained_res, X_test, y_test, feature_names, repeats)">
+    Runs the Oh decomposition for every model and every feature. For each feature it calls `decompose_feature`, which performs the three-condition permutation analysis described above.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `trained_res` | `dict` | Results dict from `train_all_models` or `load_models`. |
+    | `X_test` | `numpy.ndarray` | Scaled test features. |
+    | `y_test` | `numpy.ndarray` | True test targets. |
+    | `feature_names` | `list[str]` | Feature column names. |
+    | `repeats` | `int` or `None` | Number of permutation repeats per feature. Defaults to `permutation_repeats` in `config.settings`. |
+
+    **Returns:** `dict[str, list[dict]]` — model name to list of decomposition dicts, sorted by `total_importance_mean` descending:
+
+    | Key | Type | Description |
+    |---|---|---|
+    | `model` | `str` | Model name. |
+    | `feature` | `str` | Feature name. |
+    | `feature_index` | `int` | Column index of the feature in `X_test`. |
+    | `base_mae` | `float` | MAE of the unmodified model. |
+    | `feature_power_mean` | `float` | Mean independent feature contribution (MAE units). |
+    | `feature_power_std` | `float` | Standard deviation of feature power across repeats. |
+    | `interaction_power_mean` | `float` | Mean interaction contribution. |
+    | `interaction_power_std` | `float` | Standard deviation of interaction power across repeats. |
+    | `total_importance_mean` | `float` | Mean total importance. |
+    | `total_importance_std` | `float` | Standard deviation of total importance. |
+    | `feature_power_ratio` | `float` | `feature_power_mean / total_importance_mean` (proportion that is independent). |
+
+    ```python
+    from analysis.decomposition import run_oh_decomposition
+
+    decomposition = run_oh_decomposition(trained_res, X_test, y_test, feature_cols)
+    for model_name, items in decomposition.items():
+        for item in items:
+            print(
+                f"{item['feature']}: "
+                f"feature_power={item['feature_power_mean']:.4f}, "
+                f"interaction={item['interaction_power_mean']:.4f}"
+            )
+    ```
+  </Accordion>
+
+  <Accordion title="save_decomposition_csv(decomposition, output_path)">
+    Saves all decomposition results to `results/oh_decomposition.csv`. The `raw_importances` arrays are not written; only the scalar summary statistics are included.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `decomposition` | `dict` | Output of `run_oh_decomposition`. |
+    | `output_path` | `str` | Output directory. Defaults to `results/`. |
+
+    **Returns:** `pandas.DataFrame` — the data written to disk.
+
+    ```python
+    from analysis.decomposition import save_decomposition_csv
+
+    df = save_decomposition_csv(decomposition, 'results')
+    ```
+  </Accordion>
+
+  <Accordion title="plot_decomposition_bars(decomposition, output_path)">
+    Renders a side-by-side horizontal bar chart per model. For each feature two bars are shown — one for feature power (blue) and one for interaction power (orange). Saves to `results/oh_decomposition.png`.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `decomposition` | `dict` | Output of `run_oh_decomposition`. |
+    | `output_path` | `str` | Output directory. Defaults to `results/`. |
+
+    **Returns:** `None`.
+
+    ```python
+    from analysis.decomposition import plot_decomposition_bars
+
+    plot_decomposition_bars(decomposition, 'results')
+    ```
+  </Accordion>
+
+  <Accordion title="plot_decomposition_stacked(decomposition, output_path)">
+    Renders a stacked horizontal bar chart for the first model in `decomposition`. Feature power is shown in blue and interaction power is stacked in orange. Each bar is annotated with the percentage of total importance that is independent. Saves to `results/oh_decomposition_stacked.png`.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `decomposition` | `dict` | Output of `run_oh_decomposition`. |
+    | `output_path` | `str` | Output directory. Defaults to `results/`. |
+
+    **Returns:** `None`.
+
+    ```python
+    from analysis.decomposition import plot_decomposition_stacked
+
+    plot_decomposition_stacked(decomposition, 'results')
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## validation
+
+`analysis/validation.py` — comparison of emulated distributions against real-world datasets.
+
+<AccordionGroup>
+  <Accordion title="run_validation(emulated_features_path=None)">
+    Main validation entry point. Loads the emulated features CSV from `data/processed/features_data.csv` (or a custom path), attempts to load both real-world datasets (`energydata_complete.csv` and `HomeC.csv`) from `data/validation/`, and runs `validate_against_dataset` for each dataset found. Saves a summary CSV and plots to `results/`.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `emulated_features_path` | `str` or `None` | Path to `features_data.csv`. Defaults to `data/processed/features_data.csv`. |
+
+    **Returns:** `list[dict]` — one dict per (feature, dataset) pair. Each dict contains:
+
+    | Key | Type | Description |
+    |---|---|---|
+    | `feature` | `str` | Feature label (`emulated_col vs real_col`). |
+    | `dataset` | `str` | Name of the real-world dataset (`'UCI Appliances Energy'` or `'Kaggle Smart Home'`). |
+    | `emulated_column` | `str` | Column name in the emulated dataset. |
+    | `real_column` | `str` | Column name in the real dataset. |
+    | `emulated_n` | `int` | Number of non-null emulated values. |
+    | `real_n` | `int` | Number of non-null real values. |
+    | `emulated_mean` | `float` | Mean of emulated values. |
+    | `real_mean` | `float` | Mean of real values. |
+    | `pct_difference` | `float` | Absolute percentage difference between means. |
+    | `within_tolerance` | `bool` | `True` if `pct_difference ≤ validation_tolerance × 100`. |
+    | `emulated_std` | `float` | Standard deviation of emulated values. |
+    | `real_std` | `float` | Standard deviation of real values. |
+    | `emulated_median` | `float` | Median of emulated values. |
+    | `real_median` | `float` | Median of real values. |
+    | `emulated_min` | `float` | Minimum of emulated values. |
+    | `real_min` | `float` | Minimum of real values. |
+    | `emulated_max` | `float` | Maximum of emulated values. |
+    | `real_max` | `float` | Maximum of real values. |
+    | `ks_statistic` | `float` | Kolmogorov–Smirnov test statistic. |
+    | `ks_p_value` | `float` | KS test p-value. |
+    | `ks_significant` | `bool` | `True` if distributions differ significantly (p < `significance`). |
+    | `ks_result` | `str` | Human-readable KS interpretation: `'Very Similar distributions'`, `'Moderately Similar distributions'`, or `'Substantially different distributions'`. |
+
+    ```python
+    from analysis.validation import run_validation
+
+    results = run_validation()
+    for r in results:
+        status = "PASS" if r['within_tolerance'] else "FAIL"
+        print(f"{r['feature']} ({r['dataset']}): {status}, KS={r['ks_statistic']:.3f}")
+    ```
+
+    <Note>Place `energydata_complete.csv` (UCI) and `HomeC.csv` (Kaggle) in `data/validation/` before running validation. If neither file is found, `run_validation` returns an empty list without raising an error.</Note>
+  </Accordion>
+</AccordionGroup>

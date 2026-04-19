@@ -1,0 +1,261 @@
+---
+title: "pipeline module: preprocessing and splits"
+description: "API reference for pipeline — run_preprocessing, prepare_data, save_split, load_split, and the MQTT subscriber that writes sensor data to daily CSVs."
+---
+
+The `pipeline` module handles everything between raw sensor data and model-ready arrays. `preprocess.py` detects the raw data format, loads and cleans the CSV files, pivots long-format MQTT data to wide format, and engineers the eight features used for modelling. `split.py` performs a temporal train/test split and scales features with `StandardScaler`. `subscriber.py` is a long-running MQTT subscriber that writes incoming messages to daily CSV files.
+
+## preprocess
+
+`pipeline/preprocess.py`
+
+<AccordionGroup>
+  <Accordion title="detect_format(filepath)">
+    Reads the first three rows of a CSV file and determines whether it is in wide format (one row per timestamp with a column per sensor) or long format (one row per reading with `sensor_type` and `room` columns).
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `filepath` | `str` | Path to the CSV file to inspect. |
+
+    **Returns:** `str` — `'wide'` if the file has `temperature_*` and `power_*` columns; `'long'` if it has a `sensor_type` or `room` column; `'wide'` as the default fallback.
+
+    ```python
+    from pipeline.preprocess import detect_format
+
+    fmt = detect_format('data/raw/test_dataset.csv')
+    print(fmt)  # 'wide' or 'long'
+    ```
+  </Accordion>
+
+  <Accordion title="load_wide_format(raw_dir)">
+    Loads and concatenates all CSV files from `raw_dir` that are already in wide format. Parses the timestamp column and sets it as the DataFrame index.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `raw_dir` | `str` | Directory containing raw CSV files. Defaults to `data/raw`. |
+
+    **Returns:** `pandas.DataFrame` — merged wide-format data indexed by `timestamp`.
+
+    **Raises:** `FileNotFoundError` if no CSV files exist in `raw_dir`.
+
+    ```python
+    from pipeline.preprocess import load_wide_format
+
+    df = load_wide_format('data/raw')
+    print(df.shape)
+    ```
+  </Accordion>
+
+  <Accordion title="load_long_format(raw_dir)">
+    Loads and concatenates all CSV files from `raw_dir` that are in long format (one row per reading). Parses timestamps, coerces values to numeric, and drops rows with missing timestamps or non-numeric values. Returns a sorted DataFrame.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `raw_dir` | `str` | Directory containing raw CSV files. Defaults to `data/raw`. |
+
+    **Returns:** `pandas.DataFrame` — merged long-format data with columns `timestamp`, `room`, `sensor_type`, `appliance`, `value`.
+
+    **Raises:** `FileNotFoundError` if no CSV files exist in `raw_dir`.
+
+    ```python
+    from pipeline.preprocess import load_long_format
+
+    df_long = load_long_format('data/raw')
+    print(df_long.dtypes)
+    ```
+  </Accordion>
+
+  <Accordion title="wide_format(df, resample_freq)">
+    Pivots a long-format DataFrame to wide format. Environmental readings (`temperature`, `humidity`, `occupancy`) become `{sensor_type}_{room}` columns; appliance readings become `power_{appliance}` columns. The result is resampled to `resample_freq` using mean aggregation, then forward- and back-filled to remove gaps.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `df` | `pandas.DataFrame` | Long-format DataFrame from `load_long_format`. |
+    | `resample_freq` | `str` | Pandas offset alias, e.g. `'5min'`, `'15min'`. |
+
+    **Returns:** `pandas.DataFrame` — wide-format DataFrame indexed by timestamp.
+
+    ```python
+    from pipeline.preprocess import load_long_format, wide_format
+
+    df_long = load_long_format('data/raw')
+    df_wide = wide_format(df_long, resample_freq='5min')
+    print(df_wide.columns.tolist())
+    ```
+  </Accordion>
+
+  <Accordion title="engineer_features(df_wide)">
+    Derives the eight model features from a wide-format DataFrame. The function creates a new `pandas.DataFrame` with only these derived columns — the raw per-room and per-appliance columns are not passed through.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `df_wide` | `pandas.DataFrame` | Wide-format DataFrame with `temperature_*`, `humidity_*`, `occupancy_*`, and `power_*` columns. |
+
+    **Returns:** `pandas.DataFrame` with columns:
+
+    | Column | Description |
+    |---|---|
+    | `hour` | Hour of day extracted from the timestamp index (0–23). |
+    | `day_of_week` | Day of week (0 = Monday, 6 = Sunday). |
+    | `is_weekend` | 1 if Saturday or Sunday, otherwise 0. |
+    | `mean_temperature` | Mean of all `temperature_*` columns (°C). |
+    | `mean_humidity` | Mean of all `humidity_*` columns (%). |
+    | `occupancy_count` | Sum of all `occupancy_*` columns. |
+    | `active_appliances` | Count of `power_*` columns with value > 10 W. |
+    | `total_power` | Sum of all `power_*` columns (W). |
+
+    ```python
+    from pipeline.preprocess import engineer_features
+
+    df_features = engineer_features(df_wide)
+    print(df_features.columns.tolist())
+    # ['hour', 'day_of_week', 'is_weekend', 'mean_temperature',
+    #  'mean_humidity', 'occupancy_count', 'active_appliances', 'total_power']
+    ```
+  </Accordion>
+
+  <Accordion title="run_preprocessing(raw_dir, resample_freq, save)">
+    Main entry point for the preprocessing phase. Detects the format of the first CSV file in `raw_dir`, loads and cleans the data, engineers features, and optionally saves two CSV files to `data/processed/`.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `raw_dir` | `str` | Directory containing raw CSV files. Defaults to `data/raw`. |
+    | `resample_freq` | `str` | Resampling frequency for long-format data. Defaults to `'5min'`. |
+    | `save` | `bool` | If `True`, writes `wide_data.csv` and `features_data.csv` to `data/processed/`. Defaults to `True`. |
+
+    **Returns:** `pandas.DataFrame` — the engineered features dataset (same as `engineer_features` output).
+
+    **Raises:** `FileNotFoundError` if no CSV files are found in `raw_dir`.
+
+    ```python
+    from pipeline.preprocess import run_preprocessing
+
+    df_features = run_preprocessing(raw_dir='data/raw', resample_freq='5min', save=True)
+    print(f"Features shape: {df_features.shape}")
+    print(df_features.head())
+    ```
+
+    <Note>Run Phase 1 (dataset generation) or Phase 2 (MQTT emulation) before calling `run_preprocessing` to ensure CSV files exist in `data/raw`.</Note>
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## split
+
+`pipeline/split.py`
+
+<AccordionGroup>
+  <Accordion title="prepare_data(features, test_ratio)">
+    Performs a temporal train/test split on the features DataFrame and scales both sets with `sklearn.preprocessing.StandardScaler`. The test set is the most recent `test_ratio` fraction of records, preserving chronological order.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `features` | `pandas.DataFrame` | Engineered features from `run_preprocessing` or loaded from `features_data.csv`. |
+    | `test_ratio` | `float` | Fraction of data to use for testing. Defaults to `test_ratio` from `config.settings` (0.2). |
+
+    **Returns:** `tuple` — `(X_train, y_train, X_test, y_test, scaler, feature_cols)` where:
+
+    | Element | Type | Description |
+    |---|---|---|
+    | `X_train` | `numpy.ndarray` | Scaled training features, shape `(n_train, n_features)`. |
+    | `y_train` | `numpy.ndarray` | Training targets (`total_power`), shape `(n_train,)`. |
+    | `X_test` | `numpy.ndarray` | Scaled test features, shape `(n_test, n_features)`. |
+    | `y_test` | `numpy.ndarray` | Test targets (`total_power`), shape `(n_test,)`. |
+    | `scaler` | `StandardScaler` | Fitted scaler (fit on training set). |
+    | `feature_cols` | `list[str]` | Names of the feature columns (excludes `total_power`). |
+
+    ```python
+    from pipeline.split import prepare_data
+
+    X_train, y_train, X_test, y_test, scaler, feature_cols = prepare_data(df_features)
+    print(f"Training: {X_train.shape}, Testing: {X_test.shape}")
+    ```
+  </Accordion>
+
+  <Accordion title="save_split(X_train, y_train, X_test, y_test, scaler, feature_cols, output_dir)">
+    Saves the train/test arrays, fitted scaler, and feature column list to `output_dir`. Arrays are saved as `.npy` files; the scaler and column list are pickled.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `X_train` | `numpy.ndarray` | Scaled training features. |
+    | `y_train` | `numpy.ndarray` | Training targets. |
+    | `X_test` | `numpy.ndarray` | Scaled test features. |
+    | `y_test` | `numpy.ndarray` | Test targets. |
+    | `scaler` | `StandardScaler` | Fitted scaler object. |
+    | `feature_cols` | `list[str]` | Feature column names. |
+    | `output_dir` | `str` | Output directory. Defaults to `data/processed`. |
+
+    **Returns:** `None`. Creates or overwrites these files in `output_dir`:
+    - `X_train.npy`, `X_test.npy`, `y_train.npy`, `y_test.npy`
+    - `scaler.pkl`
+    - `feature_cols.pkl`
+
+    ```python
+    from pipeline.split import prepare_data, save_split
+
+    X_train, y_train, X_test, y_test, scaler, feature_cols = prepare_data(df_features)
+    save_split(X_train, y_train, X_test, y_test, scaler, feature_cols)
+    ```
+  </Accordion>
+
+  <Accordion title="load_split(input_dir)">
+    Loads the previously saved train/test arrays, scaler, and feature column list from `input_dir`.
+
+    **Parameters:**
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `input_dir` | `str` | Directory containing the saved split files. Defaults to `data/processed`. |
+
+    **Returns:** `tuple` — `(X_train, y_train, X_test, y_test, scaler, feature_cols)` in the same format as `prepare_data`.
+
+    ```python
+    from pipeline.split import load_split
+
+    X_train, y_train, X_test, y_test, scaler, feature_cols = load_split('data/processed')
+    print(f"Loaded training set: {X_train.shape}")
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## subscriber
+
+`pipeline/subscriber.py` is a standalone MQTT subscriber. It subscribes to all topics under `{mqtt_topic_prefix}/#`, parses incoming JSON payloads, and writes each reading as a row in a daily CSV file under `data/raw/`. A background thread logs message counts, error rates, and throughput every 30 seconds.
+
+**CSV format written:** `timestamp, room, sensor_type, appliance, value`
+
+Each calendar day gets its own file (e.g., `data/raw/2023-01-01.csv`). File handles are managed thread-safely with a write lock.
+
+**Usage:**
+
+```python
+# Run the subscriber as a background process alongside the publisher
+python -m pipeline.subscriber
+```
+
+```python
+# Launch programmatically (e.g., from run_emulation.py)
+from pipeline.subscriber import main
+main()
+```
+
+<Note>The subscriber handles graceful shutdown on `SIGINT` (Ctrl+C) and `SIGTERM`, flushing all open file handles before disconnecting.</Note>

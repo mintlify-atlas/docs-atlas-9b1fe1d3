@@ -1,97 +1,63 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Smart Home Energy Prediction"
+description: "An end-to-end Python ML pipeline for predicting household energy consumption from smart home sensor data — from emulation through model evaluation."
 ---
 
-## Setting up
+Smart Home Energy Prediction is a complete machine learning pipeline that synthesizes smart home sensor data, preprocesses it into feature-rich datasets, and trains multiple regression models to accurately forecast household energy consumption. The pipeline spans six phases — from sensor emulation and MQTT streaming to model training, evaluation, and feature analysis.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run the full pipeline end-to-end in minutes with a single command
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Installation" icon="download" href="/installation">
+    Install Python dependencies and set up Mosquitto for MQTT support
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Pipeline Overview" icon="diagram-project" href="/pipeline/overview">
+    Understand the six-phase architecture from data generation to validation
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Module Reference" icon="book" href="/reference/emulation">
+    Explore the API surface of every module in the codebase
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## How it works
 
-Everything you need to create world-class documentation.
+The pipeline runs six sequential phases, each building on the last:
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+<Steps>
+  <Step title="Generate sensor data">
+    Emulate two years of smart home readings — temperature, humidity, occupancy, and appliance power — at 5-minute intervals across five rooms.
+  </Step>
+  <Step title="Stream via MQTT (optional)">
+    Publish sensor readings to a Mosquitto broker and subscribe to collect them in real time, simulating a live IoT deployment.
+  </Step>
+  <Step title="Preprocess and engineer features">
+    Load raw CSVs, detect format, resample to a consistent frequency, and engineer time-based and aggregate features for ML.
+  </Step>
+  <Step title="Train and tune models">
+    Train Linear Regression, Random Forest, and MLP Regressor models with GridSearchCV hyperparameter tuning and 5-fold cross-validation.
+  </Step>
+  <Step title="Evaluate and compare">
+    Measure R², RMSE, and MAE against defined targets. Run paired t-tests to determine statistically significant performance differences.
+  </Step>
+  <Step title="Analyse feature importance">
+    Use permutation importance and Oh's decomposition to identify which sensor features drive energy predictions.
+  </Step>
+</Steps>
 
-## Need inspiration?
+## Key features
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<CardGroup cols={2}>
+  <Card title="Sensor emulation" icon="microchip" href="/pipeline/sensor-emulation">
+    Realistic synthetic data for temperature, humidity, occupancy, and 8 appliances across 5 rooms
+  </Card>
+  <Card title="MQTT streaming" icon="wifi" href="/pipeline/mqtt-infrastructure">
+    Real-time sensor data pipeline using paho-mqtt and Mosquitto broker
+  </Card>
+  <Card title="ML model training" icon="brain" href="/pipeline/model-training">
+    Three models with GridSearchCV tuning: Linear Regression, Random Forest, MLP
+  </Card>
+  <Card title="Feature importance" icon="chart-bar" href="/pipeline/analysis">
+    Permutation importance and Oh's decomposition with statistical significance testing
+  </Card>
+</CardGroup>
